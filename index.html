@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Control de Cortes</title>
+  <meta name="description" content="Control personal de fichas de corte y costura. Funciona sin conexión y guarda los datos en tu teléfono.">
+  <meta name="theme-color" content="#0f766e">
+  <meta name="color-scheme" content="light dark">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Cortes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; form-action 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'">
+  <script src="./theme-init.js"></script>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icons/icon-192.png" sizes="192x192" type="image/png">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Saltar al contenido</a>
+
+  <svg class="svg-sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="i-list" viewBox="0 0 24 24">
+      <path d="M9 6h12M9 12h12M9 18h12"/>
+      <path d="M4 6h.01M4 12h.01M4 18h.01"/>
+    </symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24">
+      <path d="M4 20V10M10 20V4M16 20V13M22 20H2"/>
+    </symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24">
+      <path d="M4 7h9M17 7h3M4 17h3M11 17h9"/>
+      <circle cx="15" cy="7" r="2"/>
+      <circle cx="9" cy="17" r="2"/>
+    </symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24">
+      <path d="M12 5v14M5 12h14"/>
+    </symbol>
+    <symbol id="i-search" viewBox="0 0 24 24">
+      <circle cx="11" cy="11" r="7"/>
+      <path d="m20 20-4-4"/>
+    </symbol>
+    <symbol id="i-x" viewBox="0 0 24 24">
+      <path d="M6 6l12 12M18 6 6 18"/>
+    </symbol>
+    <symbol id="i-arrow-left" viewBox="0 0 24 24">
+      <path d="M19 12H5M12 19l-7-7 7-7"/>
+    </symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24">
+      <path d="M12 20h9"/>
+      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/>
+    </symbol>
+    <symbol id="i-share" viewBox="0 0 24 24">
+      <circle cx="18" cy="5" r="3"/>
+      <circle cx="6" cy="12" r="3"/>
+      <circle cx="18" cy="19" r="3"/>
+      <path d="m8.6 10.5 6.8-4M8.6 13.5l6.8 4"/>
+    </symbol>
+    <symbol id="i-print" viewBox="0 0 24 24">
+      <path d="M7 8V3h10v5"/>
+      <rect x="4" y="8" width="16" height="9" rx="2"/>
+      <path d="M7 14h10v7H7z"/>
+    </symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24">
+      <path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14M10 11v6M14 11v6"/>
+    </symbol>
+    <symbol id="i-download" viewBox="0 0 24 24">
+      <path d="M12 3v12M7 10l5 5 5-5M4 21h16"/>
+    </symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24">
+      <path d="M12 21V9M7 14l5-5 5 5M4 4h16"/>
+    </symbol>
+    <symbol id="i-install" viewBox="0 0 24 24">
+      <rect x="6" y="2" width="12" height="20" rx="2"/>
+      <path d="M12 6v8M9 11l3 3 3-3"/>
+    </symbol>
+    <symbol id="i-check" viewBox="0 0 24 24">
+      <path d="m5 12 4 4L19 6"/>
+    </symbol>
+    <symbol id="i-calendar" viewBox="0 0 24 24">
+      <rect x="3" y="5" width="18" height="16" rx="2"/>
+      <path d="M8 3v4M16 3v4M3 10h18"/>
+    </symbol>
+    <symbol id="i-scissors" viewBox="0 0 24 24">
+      <circle cx="6" cy="7" r="3"/>
+      <circle cx="6" cy="17" r="3"/>
+      <path d="M8.5 8.5 20 20M20 4 8.5 15.5"/>
+    </symbol>
+    <symbol id="i-database" viewBox="0 0 24 24">
+      <ellipse cx="12" cy="5" rx="8" ry="3"/>
+      <path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/>
+    </symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24">
+      <path d="M12 3 2 21h20L12 3Z"/>
+      <path d="M12 9v5M12 18h.01"/>
+    </symbol>
+    <symbol id="i-chevron-right" viewBox="0 0 24 24">
+      <path d="m9 6 6 6-6 6"/>
+    </symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="9"/>
+      <path d="M12 7v5l3 2"/>
+    </symbol>
+    <symbol id="i-wifi-off" viewBox="0 0 24 24">
+      <path d="M2 2l20 20M8.5 8.5A11 11 0 0 1 22 9M2 9a11 11 0 0 1 4.6-2.6M5 13a7 7 0 0 1 3.2-1.6M8.5 17a5 5 0 0 1 4.3-.8M19 13a7 7 0 0 0-1.6-1.2M12 21h.01"/>
+    </symbol>
+    <symbol id="i-info" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="9"/>
+      <path d="M12 11v5M12 8h.01"/>
+    </symbol>
+  </svg>
+
+  <div class="app-shell">
+    <header class="app-header">
+      <div class="brand">
+        <img class="brand-logo" src="./icons/icon-192.png" alt="" width="40" height="40">
+        <div class="brand-text">
+          <h1>Control de Cortes</h1>
+          <p>Fichas de costura</p>
+        </div>
+      </div>
+      <button class="header-btn" id="install-top" type="button" hidden aria-label="Instalar esta app" title="Instalar esta app">
+        <svg class="icon" aria-hidden="true"><use href="#i-install"></use></svg>
+      </button>
+    </header>
+
+    <div id="offline-banner" class="offline-banner" hidden>
+      <svg class="icon" aria-hidden="true"><use href="#i-wifi-off"></use></svg>
+      <span>Sin conexión. Tus datos siguen guardados.</span>
+    </div>
+
+    <main id="main">
+      <section id="view-fichas" class="view" data-view="fichas">
+        <div class="page-head">
+          <div>
+            <p class="eyebrow">Tus cortes</p>
+            <h2>Fichas</h2>
+          </div>
+          <span class="head-stats" id="head-stats">0 fichas</span>
+        </div>
+
+        <div class="search-box">
+          <svg class="icon search-icon" aria-hidden="true"><use href="#i-search"></use></svg>
+          <input id="search-input" type="search" placeholder="Buscar número, modelo, color, trabajador..." autocomplete="off" aria-label="Buscar fichas">
+          <button id="search-clear" class="input-clear" type="button" aria-label="Limpiar búsqueda" hidden>
+            <svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg>
+          </button>
+        </div>
+
+        <div class="filter-chips" id="status-filters" role="group" aria-label="Filtrar por estado">
+          <button class="chip is-active" type="button" data-status="todas">Todas <span data-count="todas">0</span></button>
+          <button class="chip" type="button" data-status="cortado">Cortado <span data-count="cortado">0</span></button>
+          <button class="chip" type="button" data-status="costura">En costura <span data-count="costura">0</span></button>
+          <button class="chip" type="button" data-status="terminado">Terminado <span data-count="terminado">0</span></button>
+        </div>
+
+        <p class="result-meta" id="fichas-meta"></p>
+        <div class="cards" id="fichas-list"></div>
+
+        <div class="empty" id="fichas-empty" hidden>
+          <div class="empty-icon">
+            <svg class="icon" aria-hidden="true"><use href="#i-scissors"></use></svg>
+          </div>
+          <h3 id="empty-title">Aún no hay fichas</h3>
+          <p id="empty-text">Crea tu primera ficha para controlar colores, tallas, procesos y responsables.</p>
+          <a class="btn btn-primary" href="#/nueva" id="empty-action">Crear primera ficha</a>
+        </div>
+      </section>
+
+      <section id="view-reportes" class="view" data-view="reportes" hidden>
+        <div class="page-head">
+          <div>
+            <p class="eyebrow">Resumen</p>
+            <h2>Reportes</h2>
+          </div>
+        </div>
+
+        <div class="panel filter-panel">
+          <h3>Filtros</h3>
+          <div class="date-range">
+            <label>Desde
+              <input type="date" id="report-from" aria-label="Fecha desde">
+            </label>
+            <label>Hasta
+              <input type="date" id="report-to" aria-label="Fecha hasta">
+            </label>
+          </div>
+          <div class="filter-grid">
+            <label class="filter-field">Trabajador
+              <select id="report-worker" aria-label="Filtrar por trabajador"></select>
+            </label>
+            <label class="filter-field">Proceso
+              <select id="report-process" aria-label="Filtrar por proceso"></select>
+            </label>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-primary" id="report-apply" type="button">Aplicar</button>
+            <button class="btn" id="report-clear" type="button">Limpiar</button>
+          </div>
+        </div>
+
+        <div class="stat-grid four">
+          <div class="stat-card">
+            <span class="stat-label">Fichas</span>
+            <strong id="stat-fichas">0</strong>
+          </div>
+          <div class="stat-card accent">
+            <span class="stat-label">Piezas</span>
+            <strong id="stat-piezas">0</strong>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Asignadas</span>
+            <strong id="stat-asignadas">0</strong>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Terminadas</span>
+            <strong id="stat-terminadas">0</strong>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h3>Por estado</h3>
+          </div>
+          <div id="status-breakdown" class="breakdown"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h3>Por trabajador</h3>
+          </div>
+          <div id="worker-breakdown" class="summary-list"></div>
+          <p class="empty-small" id="worker-breakdown-empty" hidden>No hay trabajadores con asignaciones en este filtro.</p>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h3>Por proceso</h3>
+          </div>
+          <div id="process-breakdown" class="summary-list"></div>
+          <p class="empty-small" id="process-breakdown-empty" hidden>No hay procesos con asignaciones en este filtro.</p>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h3>Asignaciones</h3>
+            <span class="muted" id="assignment-count"></span>
+          </div>
+          <div id="assignment-list" class="report-list"></div>
+          <p class="empty-small" id="assignment-empty" hidden>No hay asignaciones en este filtro.</p>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h3>Fichas del periodo</h3>
+            <span class="muted" id="report-count"></span>
+          </div>
+          <div id="report-list" class="report-list"></div>
+          <p class="empty-small" id="report-empty" hidden>No hay fichas en este periodo.</p>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h3>Exportar</h3>
+          </div>
+          <div class="btn-grid export-grid">
+            <button class="btn" id="export-csv" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>
+              CSV de fichas
+            </button>
+            <button class="btn" id="export-assignments-csv" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>
+              CSV de procesos
+            </button>
+            <button class="btn" id="print-report" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#i-print"></use></svg>
+              Imprimir / PDF
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-ajustes" class="view" data-view="ajustes" hidden>
+        <div class="page-head">
+          <div>
+            <p class="eyebrow">Preferencias</p>
+            <h2>Ajustes</h2>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h3>Apariencia</h3>
+          </div>
+          <p class="panel-text">Elige cómo se ve la app en tu teléfono.</p>
+          <div class="segmented" id="theme-control" role="group" aria-label="Tema de la app">
+            <button type="button" data-theme="auto">Automático</button>
+            <button type="button" data-theme="light">Claro</button>
+            <button type="button" data-theme="dark">Oscuro</button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h3>Trabajadores</h3>
+          </div>
+          <p class="panel-text">Guarda nombres para asignarlos más rápido a los procesos. Los nombres usados en asignaciones también aparecen como sugerencia.</p>
+          <div class="worker-settings" id="settings-workers"></div>
+          <div class="worker-add">
+            <input type="text" id="worker-name" maxlength="80" autocomplete="off" placeholder="Nombre del trabajador" aria-label="Nombre del trabajador">
+            <button class="btn btn-primary" id="worker-add" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg>
+              Agregar
+            </button>
+          </div>
+        </div>
+
+        <div class="panel" id="install-panel">
+          <div class="panel-head">
+            <h3>Instalar en Android</h3>
+          </div>
+          <p class="panel-text">Ábrela como una app y úsala sin conexión. No necesita Play Store.</p>
+          <button class="btn btn-primary" id="install-btn" type="button" hidden>
+            <svg class="icon" aria-hidden="true"><use href="#i-install"></use></svg>
+            Instalar app
+          </button>
+          <p class="muted" id="install-status"></p>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h3>Respaldo</h3>
+          </div>
+          <p class="panel-text">Descarga un archivo con todas tus fichas, procesos y trabajadores, o restáuralo en otro teléfono.</p>
+          <div class="btn-grid">
+            <button class="btn" id="backup-export" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>
+              Descargar respaldo
+            </button>
+            <button class="btn" id="backup-import" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#i-upload"></use></svg>
+              Restaurar respaldo
+            </button>
+          </div>
+          <input type="file" id="backup-file" accept=".json,application/json" hidden>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h3>Datos en este teléfono</h3>
+          </div>
+          <p class="panel-text" id="storage-info">0 fichas guardadas.</p>
+          <button class="btn btn-danger" id="clear-data" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#i-trash"></use></svg>
+            Borrar todas las fichas
+          </button>
+        </div>
+
+        <div class="panel muted-panel">
+          <div class="panel-head">
+            <h3>Acerca de</h3>
+          </div>
+          <p class="panel-text">Control de Cortes · Versión 2.0</p>
+          <p class="panel-text">Hecha para uso personal. Sin cuentas ni nube: tus datos se guardan solo en este dispositivo. Descarga un respaldo de vez en cuando.</p>
+        </div>
+      </section>
+    </main>
+
+    <nav class="bottom-nav" aria-label="Navegación principal">
+      <a class="nav-btn" href="#/fichas" data-nav="fichas">
+        <svg class="icon" aria-hidden="true"><use href="#i-list"></use></svg>
+        <span>Fichas</span>
+      </a>
+      <a class="nav-btn" href="#/reportes" data-nav="reportes">
+        <svg class="icon" aria-hidden="true"><use href="#i-chart"></use></svg>
+        <span>Reportes</span>
+      </a>
+      <a class="nav-btn" href="#/ajustes" data-nav="ajustes">
+        <svg class="icon" aria-hidden="true"><use href="#i-settings"></use></svg>
+        <span>Ajustes</span>
+      </a>
+    </nav>
+  </div>
+
+  <a class="fab" id="fab-nueva" href="#/nueva" aria-label="Nueva ficha">
+    <svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg>
+    <span>Nueva ficha</span>
+  </a>
+
+  <datalist id="workers-list"></datalist>
+  <div id="modal-root"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="print-area" class="print-area" aria-hidden="true"></div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
