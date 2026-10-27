@@ -1,8 +1,8 @@
 {
   "id": "./",
-  "name": "Control de Cortes",
-  "short_name": "Cortes",
-  "description": "Control personal de fichas de corte con colores, tallas, procesos, responsables, reportes y respaldo. Funciona sin conexión.",
+  "name": "Administración de Corte Sergio",
+  "short_name": "Corte Sergio",
+  "description": "Administración de Corte Sergio: fichas de corte y costura con colores, tallas, procesos, responsables, reportes y respaldo. Funciona sin conexión.",
   "lang": "es",
   "dir": "ltr",
   "start_url": "./",

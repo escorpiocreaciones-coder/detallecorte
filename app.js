@@ -38,7 +38,7 @@ import {
 const STORAGE_KEY = 'control-cortes.v1';
 const THEME_KEY = 'control-cortes.theme';
 const VALID_THEMES = ['auto', 'light', 'dark'];
-const QUICK_SIZES = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'Único'];
+const QUICK_SIZES = ['M', 'G', 'GG', 'S', 'L', 'XL', 'XXL', 'Único'];
 const VIEW_TITLES = { fichas: 'Fichas', reportes: 'Reportes', ajustes: 'Ajustes' };
 const PROCESS_STATE_LABELS = {
   sin_asignar: 'Sin asignar',
@@ -240,7 +240,7 @@ function setView(view) {
     if (active) button.setAttribute('aria-current', 'page');
     else button.removeAttribute('aria-current');
   });
-  document.title = `${VIEW_TITLES[view] ?? 'Fichas'} · Control de Cortes`;
+  document.title = `${VIEW_TITLES[view] ?? 'Fichas'} · Administración de Corte Sergio`;
   updateFab();
 }
 
@@ -886,7 +886,7 @@ function printReport(fichas, assignments) {
   startPrint(`
     <article class="print-doc">
       <header class="print-header">
-        <div class="print-brand">Control de Cortes<small>Fichas de costura</small></div>
+        <div class="print-brand">Administración de Corte Sergio<small>Fichas de costura</small></div>
         <div class="print-generated">Generado el ${escapeHTML(generated)}</div>
       </header>
       <h1 class="print-title">Reporte de cortes y procesos</h1>
@@ -912,7 +912,7 @@ function printReport(fichas, assignments) {
         </thead>
         <tbody>${assignmentRows || '<tr><td colspan="7">Sin asignaciones en este filtro.</td></tr>'}</tbody>
       </table>
-      <p class="print-footer">Control de Cortes · Datos guardados en el teléfono</p>
+      <p class="print-footer">Administración de Corte Sergio · Datos guardados en el teléfono</p>
     </article>`);
 }
 
@@ -951,7 +951,7 @@ function printFicha(ficha) {
   startPrint(`
     <article class="print-doc">
       <header class="print-header">
-        <div class="print-brand">Control de Cortes<small>Fichas de costura</small></div>
+        <div class="print-brand">Administración de Corte Sergio<small>Fichas de costura</small></div>
         <div class="print-generated">Generado el ${escapeHTML(generated)}</div>
       </header>
       <h1 class="print-title">Ficha de corte N.º ${escapeHTML(ficha.numero)}</h1>
@@ -969,7 +969,7 @@ function printFicha(ficha) {
         <div class="print-signature">Cortado por</div>
         <div class="print-signature">Recibido por</div>
       </div>
-      <p class="print-footer">Control de Cortes · Datos guardados en el teléfono</p>
+      <p class="print-footer">Administración de Corte Sergio · Datos guardados en el teléfono</p>
     </article>`);
 }
 
@@ -1368,10 +1368,8 @@ function colorBlockMarkup(color = {}) {
   return `
     <section class="color-block" data-color-block data-color-id="${escapeHTML(id)}">
       <div class="color-block-head">
-        <div class="field color-name-field">
-          <span class="field-label">Color <span class="required">*</span></span>
-          <input type="text" data-color-name maxlength="80" autocomplete="off" placeholder="Ej. Negro" value="${escapeHTML(color.color ?? '')}">
-        </div>
+        <span class="color-index" data-color-index>1</span>
+        <span class="color-block-caption">Color de la ficha</span>
         <div class="color-block-side">
           <span class="total-badge">Total: <strong data-color-total>0</strong></span>
           <button class="icon-btn color-remove" type="button" data-remove-color aria-label="Quitar color">
@@ -1379,10 +1377,24 @@ function colorBlockMarkup(color = {}) {
           </button>
         </div>
       </div>
-      <small class="field-error" data-color-error></small>
-      <div class="quick-sizes">${quickSizesMarkup()}</div>
-      <div class="sizes-rows" data-sizes-rows>${tallas.map((row) => sizeRowMarkup(row)).join('')}</div>
-      <button class="btn btn-dashed" type="button" data-add-size>
+      <label class="field color-name-field">
+        <span class="field-label">Color <span class="required">*</span></span>
+        <input type="text" data-color-name maxlength="80" autocomplete="off" placeholder="Ej. Negro" value="${escapeHTML(color.color ?? '')}">
+        <small class="field-error" data-color-error></small>
+      </label>
+      <div class="quick-size-row">
+        <span class="quick-label">Tallas rápidas</span>
+        <div class="quick-sizes">${quickSizesMarkup()}</div>
+      </div>
+      <div class="size-table">
+        <div class="size-table-head" aria-hidden="true">
+          <span>Talla</span>
+          <span>Cantidad</span>
+          <span></span>
+        </div>
+        <div class="sizes-rows" data-sizes-rows>${tallas.map((row) => sizeRowMarkup(row)).join('')}</div>
+      </div>
+      <button class="btn btn-dashed btn-add-size" type="button" data-add-size>
         <svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg>
         Agregar talla
       </button>
@@ -1412,6 +1424,8 @@ function updateColorLabels(form) {
     if (label) {
       label.innerHTML = `Color ${index + 1} <span class="required">*</span>`;
     }
+    const badge = block.querySelector('[data-color-index]');
+    if (badge) badge.textContent = String(index + 1).padStart(2, '0');
   });
 }
 
@@ -1537,7 +1551,7 @@ function openFichaForm(ficha) {
     fecha: ficha?.fecha ?? todayISO(),
     modelo: ficha?.modelo ?? '',
     notas: ficha?.notas ?? '',
-    estado: ficha?.estado ?? 'cortado',
+    estado: ficha?.estado ?? 'costura',
     colores: ficha?.colores?.length ? ficha.colores : [{}]
   };
   const statusButtons = STATUSES.map((status) => {
@@ -1551,47 +1565,69 @@ function openFichaForm(ficha) {
   form.noValidate = true;
   form.innerHTML = `
     <div class="form-alert" id="form-alert" hidden></div>
-    <div class="form-grid two">
+    <section class="form-section">
+      <div class="form-section-head">
+        <span class="form-step">1</span>
+        <div class="form-section-title">
+          <h3>Datos del corte</h3>
+          <p>Número, fecha y referencia del modelo.</p>
+        </div>
+      </div>
+      <div class="form-grid two">
+        <label class="field">
+          <span class="field-label">Número <span class="required">*</span></span>
+          <input id="form-numero" name="numero" type="text" maxlength="40" autocomplete="off" value="${escapeHTML(values.numero)}">
+          <small class="field-error" data-error-for="numero"></small>
+        </label>
+        <label class="field">
+          <span class="field-label">Fecha <span class="required">*</span></span>
+          <input id="form-fecha" name="fecha" type="date" value="${escapeHTML(values.fecha)}">
+          <small class="field-error" data-error-for="fecha"></small>
+        </label>
+      </div>
       <label class="field">
-        <span class="field-label">Número <span class="required">*</span></span>
-        <input id="form-numero" name="numero" type="text" maxlength="40" autocomplete="off" value="${escapeHTML(values.numero)}">
-        <small class="field-error" data-error-for="numero"></small>
+        <span class="field-label">Modelo / referencia <span class="required">*</span></span>
+        <input id="form-modelo" name="modelo" type="text" maxlength="120" autocomplete="off" placeholder="Ej. Polo Lacoste REF. 3487" value="${escapeHTML(values.modelo)}">
+        <small class="field-error" data-error-for="modelo"></small>
       </label>
-      <label class="field">
-        <span class="field-label">Fecha <span class="required">*</span></span>
-        <input id="form-fecha" name="fecha" type="date" value="${escapeHTML(values.fecha)}">
-        <small class="field-error" data-error-for="fecha"></small>
-      </label>
-    </div>
-    <label class="field">
-      <span class="field-label">Modelo <span class="required">*</span></span>
-      <input id="form-modelo" name="modelo" type="text" maxlength="120" autocomplete="off" value="${escapeHTML(values.modelo)}">
-      <small class="field-error" data-error-for="modelo"></small>
-    </label>
-    <div class="field">
-      <span class="field-label">Estado general</span>
-      <div class="segmented status-segmented" id="form-status">${statusButtons}</div>
-    </div>
-    <div class="colors-block">
-      <div class="colors-head">
-        <div>
-          <span class="field-label">Colores y tallas <span class="required">*</span></span>
-          <p class="field-hint">Cada color lleva sus propias tallas y cantidades.</p>
+      <div class="field form-status-field">
+        <span class="field-label">Estado general</span>
+        <div class="segmented status-segmented" id="form-status">${statusButtons}</div>
+        <p class="field-hint">La ficha empieza en costura y pasa a terminada cuando completes el trabajo.</p>
+      </div>
+    </section>
+    <section class="form-section">
+      <div class="form-section-head">
+        <span class="form-step">2</span>
+        <div class="form-section-title">
+          <h3>Colores y cantidades <span class="required">*</span></h3>
+          <p>Agregá cada color con sus tallas, como en la ficha de corte.</p>
         </div>
         <span class="total-badge">Total: <strong id="form-total">0</strong></span>
       </div>
-      <div id="color-blocks">${values.colores.map((color) => colorBlockMarkup(color)).join('')}</div>
-      <button class="btn btn-dashed" id="add-color" type="button">
-        <svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg>
-        Agregar color
-      </button>
-      <small class="field-error" data-error-for="colores"></small>
-    </div>
-    <label class="field">
-      <span class="field-label">Notas</span>
-      <textarea id="form-notas" name="notas" maxlength="2000" rows="3" placeholder="Instrucciones, entregas, detalles...">${escapeHTML(values.notas)}</textarea>
-      <small class="field-error" data-error-for="notas"></small>
-    </label>`;
+      <div class="colors-block">
+        <div id="color-blocks">${values.colores.map((color) => colorBlockMarkup(color)).join('')}</div>
+        <button class="btn btn-dashed" id="add-color" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg>
+          Agregar otro color
+        </button>
+        <small class="field-error" data-error-for="colores"></small>
+      </div>
+    </section>
+    <section class="form-section">
+      <div class="form-section-head">
+        <span class="form-step">3</span>
+        <div class="form-section-title">
+          <h3>Notas del corte</h3>
+          <p>Instrucciones, entregas o detalles importantes.</p>
+        </div>
+      </div>
+      <label class="field">
+        <span class="field-label">Notas</span>
+        <textarea id="form-notas" name="notas" maxlength="2000" rows="3" placeholder="Instrucciones, entregas, detalles...">${escapeHTML(values.notas)}</textarea>
+        <small class="field-error" data-error-for="notas"></small>
+      </label>
+    </section>`;
 
   const actions = document.createElement('div');
   actions.className = 'sheet-actions';
@@ -1603,7 +1639,7 @@ function openFichaForm(ficha) {
   const requestClose = () => navigate(returnHash, { replace: true });
 
   mountSheet({
-    eyebrow: editing ? `Ficha N.º ${values.numero}` : 'Control de cortes',
+    eyebrow: editing ? `Ficha N.º ${values.numero}` : 'Administración de Corte Sergio',
     title: editing ? 'Editar ficha' : 'Nueva ficha',
     body: form,
     actions,
@@ -1705,7 +1741,7 @@ function openFichaForm(ficha) {
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     clearFormErrors(form);
-    const selectedStatus = $('#form-status .is-active', form)?.dataset.status ?? 'cortado';
+    const selectedStatus = $('#form-status .is-active', form)?.dataset.status ?? 'costura';
     const colores = $$('[data-color-block]', form).map((block) => {
       const colorId = block.dataset.colorId;
       const existingColor = colorId ? ficha?.colores?.find((color) => color.id === colorId) : null;

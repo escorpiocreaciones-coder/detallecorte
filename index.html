@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Control de Cortes</title>
-  <meta name="description" content="Control personal de fichas de corte y costura. Funciona sin conexión y guarda los datos en tu teléfono.">
+  <title>Administración de Corte Sergio</title>
+  <meta name="description" content="Administración de Corte Sergio: fichas de corte y costura con colores, tallas, procesos y respaldo. Funciona sin conexión.">
   <meta name="theme-color" content="#0f766e">
   <meta name="color-scheme" content="light dark">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Cortes">
+  <meta name="apple-mobile-web-app-title" content="Corte Sergio">
   <meta name="mobile-web-app-capable" content="yes">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; form-action 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'">
   <script src="./theme-init.js"></script>
@@ -109,15 +109,28 @@
       <circle cx="12" cy="12" r="9"/>
       <path d="M12 11v5M12 8h.01"/>
     </symbol>
+    <symbol id="i-polo" viewBox="0 0 64 64">
+      <path d="M24 8 12 14 5 25l10 6 4-7v29h26V24l4 7 10-6-7-11-12-6-5 4h-6l-5-4Z" fill="currentColor"/>
+      <path d="M24 8c0 4 3.6 7 8 7s8-3 8-7" fill="none" stroke="var(--polo-detail, rgba(255,255,255,.55))" stroke-width="2" stroke-linecap="round"/>
+      <path d="M32 15v13" fill="none" stroke="var(--polo-detail, rgba(255,255,255,.42))" stroke-width="2" stroke-linecap="round"/>
+      <circle cx="32" cy="20" r="1.3" fill="var(--polo-detail, rgba(255,255,255,.7))"/>
+      <circle cx="32" cy="25" r="1.3" fill="var(--polo-detail, rgba(255,255,255,.7))"/>
+    </symbol>
   </svg>
 
   <div class="app-shell">
     <header class="app-header">
+      <div class="header-polos" aria-hidden="true">
+        <svg class="polo-deco polo-deco--blanco" viewBox="0 0 64 64"><use href="#i-polo"></use></svg>
+        <svg class="polo-deco polo-deco--celeste" viewBox="0 0 64 64"><use href="#i-polo"></use></svg>
+        <svg class="polo-deco polo-deco--coral" viewBox="0 0 64 64"><use href="#i-polo"></use></svg>
+        <svg class="polo-deco polo-deco--azul" viewBox="0 0 64 64"><use href="#i-polo"></use></svg>
+      </div>
       <div class="brand">
         <img class="brand-logo" src="./icons/icon-192.png" alt="" width="40" height="40">
         <div class="brand-text">
-          <h1>Control de Cortes</h1>
-          <p>Fichas de costura</p>
+          <h1>Administración de Corte Sergio</h1>
+          <p>Fichas de corte y costura</p>
         </div>
       </div>
       <button class="header-btn" id="install-top" type="button" hidden aria-label="Instalar esta app" title="Instalar esta app">
@@ -150,7 +163,6 @@
 
         <div class="filter-chips" id="status-filters" role="group" aria-label="Filtrar por estado">
           <button class="chip is-active" type="button" data-status="todas">Todas <span data-count="todas">0</span></button>
-          <button class="chip" type="button" data-status="cortado">Cortado <span data-count="cortado">0</span></button>
           <button class="chip" type="button" data-status="costura">En costura <span data-count="costura">0</span></button>
           <button class="chip" type="button" data-status="terminado">Terminado <span data-count="terminado">0</span></button>
         </div>
@@ -361,7 +373,7 @@
           <div class="panel-head">
             <h3>Acerca de</h3>
           </div>
-          <p class="panel-text">Control de Cortes · Versión 2.0</p>
+          <p class="panel-text">Administración de Corte Sergio · Versión 2.1</p>
           <p class="panel-text">Hecha para uso personal. Sin cuentas ni nube: tus datos se guardan solo en este dispositivo. Descarga un respaldo de vez en cuando.</p>
         </div>
       </section>

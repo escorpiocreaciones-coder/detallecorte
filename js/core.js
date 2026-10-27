@@ -1,7 +1,6 @@
 export const DATA_VERSION = 2;
 
 export const STATUSES = [
-  { id: 'cortado', label: 'Cortado' },
   { id: 'costura', label: 'En costura' },
   { id: 'terminado', label: 'Terminado' }
 ];
@@ -309,7 +308,7 @@ export function sanitizeFicha(input, options = {}) {
     errors.notas = 'Las notas no pueden pasar de 2000 caracteres.';
   }
 
-  const estado = STATUS_IDS.includes(input?.estado) ? input.estado : 'cortado';
+  const estado = STATUS_IDS.includes(input?.estado) ? input.estado : 'costura';
 
   let rawColores = Array.isArray(input?.colores) ? input.colores : [];
   if (rawColores.length === 0 && Array.isArray(input?.tallas)) {
@@ -463,7 +462,7 @@ export function migrateFicha(raw) {
     modelo,
     colores,
     total: computeFichaTotal(colores),
-    estado: STATUS_IDS.includes(raw.estado) ? raw.estado : 'cortado',
+    estado: STATUS_IDS.includes(raw.estado) ? raw.estado : 'costura',
     notas: String(raw.notas ?? '').trim(),
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : now,
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : now

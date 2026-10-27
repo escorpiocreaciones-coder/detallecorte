@@ -1,4 +1,4 @@
-const CACHE_NAME = 'control-cortes-v4';
+const CACHE_NAME = 'control-cortes-v5';
 const APP_SHELL = [
   './',
   './index.html',

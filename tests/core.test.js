@@ -56,7 +56,7 @@ function buildFicha(overrides = {}, fichas = []) {
     numero: '101',
     fecha: '2026-10-20',
     modelo: 'Blusa básica',
-    estado: 'cortado',
+    estado: 'costura',
     notas: '',
     colores: sampleColores(),
     ...overrides
@@ -302,7 +302,7 @@ test('formatDate presenta la fecha en formato costarricense', () => {
 
 test('filterFichas busca por color, talla y trabajador, y filtra por estado y fecha', () => {
   const fichas = [
-    buildFicha({ numero: '1', fecha: '2026-10-01', modelo: 'Blusa básica', estado: 'cortado' }),
+    buildFicha({ numero: '1', fecha: '2026-10-01', modelo: 'Blusa básica', estado: 'costura' }),
     buildFicha({
       numero: '2',
       fecha: '2026-10-15',
@@ -323,36 +323,34 @@ test('filterFichas busca por color, talla y trabajador, y filtra por estado y fe
   assert.equal(filterFichas(fichas, { query: 'rojo' }).length, 1);
   assert.equal(filterFichas(fichas, { query: 'luis' }).length, 1);
   assert.equal(filterFichas(fichas, { query: 'l' }).length, 3);
-  assert.equal(filterFichas(fichas, { status: 'costura' }).length, 1);
+  assert.equal(filterFichas(fichas, { status: 'costura' }).length, 2);
   assert.equal(filterFichas(fichas, { from: '2026-10-10', to: '2026-10-31' }).length, 1);
-  assert.equal(filterFichas(fichas, { query: 'vestido', status: 'cortado' }).length, 0);
+  assert.equal(filterFichas(fichas, { query: 'vestido', status: 'costura' }).length, 0);
   assert.equal(filterFichas(fichas, {}).length, 3);
 });
 
 test('countByStatus cuenta todas y cada estado respetando la búsqueda', () => {
   const fichas = [
-    buildFicha({ numero: '1', modelo: 'Blusa', estado: 'cortado' }),
+    buildFicha({ numero: '1', modelo: 'Blusa', estado: 'costura' }),
     buildFicha({ numero: '2', modelo: 'Pantalón', estado: 'costura' }),
     buildFicha({ numero: '3', modelo: 'Blusa sport', estado: 'terminado' })
   ];
 
   assert.deepEqual(countByStatus(fichas, ''), {
     todas: 3,
-    cortado: 1,
-    costura: 1,
+    costura: 2,
     terminado: 1
   });
   assert.deepEqual(countByStatus(fichas, 'blusa'), {
     todas: 2,
-    cortado: 1,
-    costura: 0,
+    costura: 1,
     terminado: 1
   });
 });
 
 test('computeStats suma fichas, piezas y avance de asignaciones', () => {
   const fichas = [
-    buildFicha({ numero: '1', estado: 'cortado' }),
+    buildFicha({ numero: '1', estado: 'terminado' }),
     buildFicha({
       numero: '2',
       estado: 'costura',
@@ -376,11 +374,10 @@ test('computeStats suma fichas, piezas y avance de asignaciones', () => {
   assert.equal(stats.totalPiezas, 27);
   assert.equal(stats.totalAsignado, 33);
   assert.equal(stats.totalTerminado, 13);
-  assert.equal(stats.byStatus.cortado.count, 1);
-  assert.equal(stats.byStatus.cortado.piezas, 19);
   assert.equal(stats.byStatus.costura.count, 2);
   assert.equal(stats.byStatus.costura.piezas, 8);
-  assert.equal(stats.byStatus.terminado.count, 0);
+  assert.equal(stats.byStatus.terminado.count, 1);
+  assert.equal(stats.byStatus.terminado.piezas, 19);
 });
 
 test('processProgress calcula cantidades asignadas y terminadas', () => {
@@ -531,6 +528,23 @@ test('migrateFicha conserva el modelo v2 y normaliza datos inválidos', () => {
   assert.equal(ficha.colores[0].procesos.recta.length, 1);
   assert.equal(ficha.colores[0].procesos.recta[0].trabajador, 'Ana');
   assert.equal(ficha.total, 5);
+  assert.equal(ficha.estado, 'costura');
+});
+
+test('migrateFicha convierte el estado antiguo cortado a costura', () => {
+  const ficha = migrateFicha({
+    numero: '10',
+    fecha: '2026-10-20',
+    modelo: 'Polo',
+    estado: 'cortado',
+    colores: [{
+      color: 'Azul',
+      tallas: [{ talla: 'M', cantidad: 4 }],
+      procesos: {}
+    }]
+  });
+
+  assert.equal(ficha.estado, 'costura');
 });
 
 test('validateBackup acepta respaldos v2 y corrige ids repetidos', () => {
