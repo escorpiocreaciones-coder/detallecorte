@@ -34,6 +34,22 @@ import {
   uid,
   validateBackup
 } from './js/core.js';
+import {
+  dataSignature,
+  isValidSupabaseUrl,
+  loadSyncState,
+  mergeData,
+  normalizeSupabaseUrl,
+  pruneDeleted,
+  pullData,
+  pushData,
+  refreshSession,
+  sanitizeDeleted,
+  saveSyncState,
+  signIn,
+  signOutRemote,
+  signUp
+} from './js/sync.js';
 
 const STORAGE_KEY = 'control-cortes.v1';
 const THEME_KEY = 'control-cortes.theme';
@@ -62,7 +78,12 @@ const state = {
   route: null,
   sheet: null,
   deferredPrompt: null,
-  toastTimer: null
+  toastTimer: null,
+  sync: loadSyncState(),
+  syncBusy: false,
+  syncQueued: false,
+  syncPushTimer: null,
+  syncPollTimer: null
 };
 
 let lastFocus = null;
@@ -80,7 +101,8 @@ function loadData() {
   const fallback = {
     version: DATA_VERSION,
     fichas: [],
-    settings: { theme: storedTheme(), trabajadores: [] }
+    settings: { theme: storedTheme(), trabajadores: [] },
+    deleted: {}
   };
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -101,15 +123,21 @@ function loadData() {
       ...(Array.isArray(parsed?.settings?.trabajadores) ? parsed.settings.trabajadores : []),
       ...(Array.isArray(parsed?.trabajadores) ? parsed.trabajadores : [])
     ]);
-    return { version: DATA_VERSION, fichas, settings: { theme, trabajadores } };
+    return {
+      version: DATA_VERSION,
+      fichas,
+      settings: { theme, trabajadores },
+      deleted: pruneDeleted(parsed?.deleted)
+    };
   } catch {
     return fallback;
   }
 }
 
-function persistData() {
+function persistData(options = {}) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state.data));
+    if (!options.fromSync) scheduleSyncPush();
     return true;
   } catch {
     toast('No se pudieron guardar los cambios en este teléfono.');
@@ -124,6 +152,291 @@ function persistMigrationIfNeeded() {
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed?.fichas) && parsed.version !== DATA_VERSION) persistData();
   } catch {}
+}
+
+function persistSyncState() {
+  saveSyncState({
+    config: state.sync.config,
+    session: state.sync.session,
+    lastSyncedAt: state.sync.lastSyncedAt,
+    lastError: state.sync.lastError
+  });
+}
+
+function syncConfigured() {
+  return Boolean(state.sync.config.url && state.sync.config.anonKey);
+}
+
+function syncPayload() {
+  return {
+    version: DATA_VERSION,
+    fichas: state.data.fichas,
+    settings: { trabajadores: state.data.settings.trabajadores },
+    deleted: state.data.deleted ?? {}
+  };
+}
+
+function friendlySyncError(error) {
+  const message = String(error?.message ?? '').trim();
+  if (!message) return 'Error de sincronización.';
+  if (error?.offline || /failed to fetch|networkerror|load failed|fetch/i.test(message)) {
+    return 'No se pudo conectar con Supabase. Revisa tu internet.';
+  }
+  if (/invalid login credentials/i.test(message)) return 'Correo o contraseña incorrectos.';
+  if (/email not confirmed/i.test(message)) return 'Confirma tu correo con el enlace que envió Supabase.';
+  if (/user already registered|already been registered/i.test(message)) return 'Ese correo ya tiene cuenta. Usa Iniciar sesión.';
+  if (/row-level security|permission denied/i.test(message)) return 'Falta ejecutar supabase-setup.sql en Supabase.';
+  if (/relation .* does not exist|does not exist/i.test(message)) return 'Falta crear la tabla corte_sync con supabase-setup.sql.';
+  if (/invalid refresh token|refresh token not found|jwt expired|invalid jwt/i.test(message)) {
+    return 'La sesión expiró. Inicia sesión de nuevo.';
+  }
+  return message;
+}
+
+function isAuthFailure(error) {
+  if (error?.status === 401) return true;
+  return /invalid refresh token|refresh token not found|jwt expired|invalid jwt|session.*expir/i.test(String(error?.message ?? ''));
+}
+
+let syncFieldsFilled = false;
+
+function fillSyncFields() {
+  if (syncFieldsFilled) return;
+  syncFieldsFilled = true;
+  const urlInput = $('#sync-url');
+  const keyInput = $('#sync-key');
+  const emailInput = $('#sync-email');
+  if (urlInput && state.sync.config.url) urlInput.value = state.sync.config.url;
+  if (keyInput && state.sync.config.anonKey) keyInput.value = state.sync.config.anonKey;
+  if (emailInput && state.sync.session?.email) emailInput.value = state.sync.session.email;
+}
+
+function updateSyncPanel() {
+  const status = $('#sync-status');
+  if (!status) return;
+  const signedIn = Boolean(state.sync.session?.accessToken);
+  let text = '';
+  if (state.syncBusy) {
+    text = 'Sincronizando…';
+  } else if (!syncConfigured()) {
+    text = 'Sin configurar: pega la URL y la clave anon de tu proyecto Supabase.';
+  } else if (!signedIn) {
+    text = 'Configurado, sin sesión. Inicia sesión o crea la cuenta.';
+  } else {
+    const last = state.sync.lastSyncedAt ? formatDateTime(state.sync.lastSyncedAt) : 'nunca';
+    text = `Conectado como ${state.sync.session.email || 'tu cuenta'}. Última sincronización: ${last}.`;
+  }
+  if (state.sync.lastError) text += ` ${state.sync.lastError}`;
+  status.textContent = text;
+
+  const badge = $('#sync-badge');
+  if (badge) {
+    badge.textContent = state.syncBusy
+      ? 'Sincronizando'
+      : (signedIn ? 'Conectado' : (syncConfigured() ? 'Sin sesión' : 'Sin configurar'));
+  }
+  const nowButton = $('#sync-now');
+  if (nowButton) nowButton.disabled = !signedIn || state.syncBusy;
+  const logoutButton = $('#sync-logout');
+  if (logoutButton) logoutButton.disabled = !signedIn || state.syncBusy;
+  const signinButton = $('#sync-signin');
+  if (signinButton) signinButton.disabled = state.syncBusy;
+  const signupButton = $('#sync-signup');
+  if (signupButton) signupButton.disabled = state.syncBusy;
+}
+
+function applySyncConfigFromInputs() {
+  const url = normalizeSupabaseUrl($('#sync-url').value);
+  const anonKey = $('#sync-key').value.trim();
+  if (!isValidSupabaseUrl(url)) {
+    toast('Pega la URL del proyecto: https://tuproyecto.supabase.co');
+    return null;
+  }
+  if (anonKey.length < 20) {
+    toast('Pega la clave anon de Supabase (Settings → API).');
+    return null;
+  }
+  const changed = state.sync.config.url !== url || state.sync.config.anonKey !== anonKey;
+  if (changed) {
+    if (state.sync.session) toast('Cambiaste de proyecto. Inicia sesión de nuevo.');
+    state.sync.config = { url, anonKey };
+    state.sync.session = null;
+    state.sync.lastSyncedAt = '';
+    state.sync.lastError = '';
+    persistSyncState();
+  }
+  return state.sync.config;
+}
+
+async function ensureFreshSession() {
+  const session = state.sync.session;
+  if (!session) throw new Error('Inicia sesión para sincronizar.');
+  if (!session.expiresAt || Date.now() < session.expiresAt - 60_000) return session;
+  const next = await refreshSession(state.sync.config, session);
+  state.sync.session = next;
+  persistSyncState();
+  return next;
+}
+
+function scheduleSyncPush() {
+  if (!state.sync.session || !syncConfigured()) return;
+  window.clearTimeout(state.syncPushTimer);
+  state.syncPushTimer = window.setTimeout(() => syncNow('auto'), 1800);
+}
+
+async function syncNow(source = 'auto') {
+  if (!syncConfigured() || !state.sync.session) {
+    if (source === 'manual') toast('Configura Supabase e inicia sesión primero.');
+    return;
+  }
+  if (state.syncBusy) {
+    state.syncQueued = true;
+    return;
+  }
+  if (!navigator.onLine) {
+    if (source === 'manual') toast('Sin conexión. Se sincronizará cuando vuelva internet.');
+    updateSyncPanel();
+    return;
+  }
+  state.syncBusy = true;
+  state.sync.lastError = '';
+  updateSyncPanel();
+  try {
+    const session = await ensureFreshSession();
+    const remote = await pullData(state.sync.config, session);
+    const localSig = dataSignature(state.data);
+    const remoteSig = remote ? dataSignature(remote) : '';
+    const merged = mergeData(state.data, remote);
+    const mergedSig = dataSignature(merged);
+
+    if (mergedSig !== localSig) {
+      state.data = merged;
+      persistData({ fromSync: true });
+      refreshWorkerOptions();
+      renderFichas();
+      renderReports();
+      renderSettings();
+    }
+    if (mergedSig !== remoteSig) {
+      await pushData(state.sync.config, session, syncPayload());
+    }
+    state.sync.lastSyncedAt = new Date().toISOString();
+    state.sync.lastError = '';
+    persistSyncState();
+    if (source === 'manual' || source === 'login' || source === 'signup') toast('Datos sincronizados.');
+  } catch (error) {
+    if (isAuthFailure(error)) {
+      state.sync.session = null;
+      state.sync.lastError = 'La sesión expiró. Inicia sesión de nuevo.';
+      state.sync.lastSyncedAt = '';
+      persistSyncState();
+      if (source !== 'auto') toast(state.sync.lastError);
+    } else {
+      state.sync.lastError = friendlySyncError(error);
+      persistSyncState();
+      if (source === 'manual' || source === 'login' || source === 'signup') {
+        toast(`No se pudo sincronizar: ${state.sync.lastError}`);
+      }
+    }
+  } finally {
+    state.syncBusy = false;
+    updateSyncPanel();
+    if (state.syncQueued) {
+      state.syncQueued = false;
+      window.setTimeout(() => syncNow('auto'), 800);
+    }
+  }
+}
+
+async function handleSyncSignIn() {
+  if (state.syncBusy) return;
+  const config = applySyncConfigFromInputs();
+  if (!config) return;
+  const email = $('#sync-email').value.trim();
+  const password = $('#sync-password').value;
+  if (!email || !password) {
+    toast('Escribe el correo y la contraseña.');
+    return;
+  }
+  state.syncBusy = true;
+  state.sync.lastError = '';
+  updateSyncPanel();
+  let session = null;
+  try {
+    session = await signIn(config, email, password);
+    state.sync.session = session;
+    persistSyncState();
+    $('#sync-password').value = '';
+  } catch (error) {
+    state.sync.lastError = friendlySyncError(error);
+    toast(state.sync.lastError);
+  } finally {
+    state.syncBusy = false;
+    updateSyncPanel();
+  }
+  if (session) await syncNow('login');
+}
+
+async function handleSyncSignUp() {
+  if (state.syncBusy) return;
+  const config = applySyncConfigFromInputs();
+  if (!config) return;
+  const email = $('#sync-email').value.trim();
+  const password = $('#sync-password').value;
+  if (!email || !password) {
+    toast('Escribe el correo y una contraseña.');
+    return;
+  }
+  state.syncBusy = true;
+  state.sync.lastError = '';
+  updateSyncPanel();
+  let session = null;
+  try {
+    const result = await signUp(config, email, password);
+    session = result.session;
+    if (session) {
+      state.sync.session = session;
+      persistSyncState();
+      $('#sync-password').value = '';
+    } else {
+      toast('Cuenta creada. Confirma tu correo y luego inicia sesión.');
+    }
+  } catch (error) {
+    state.sync.lastError = friendlySyncError(error);
+    toast(state.sync.lastError);
+  } finally {
+    state.syncBusy = false;
+    updateSyncPanel();
+  }
+  if (session) await syncNow('signup');
+}
+
+function handleSyncLogout() {
+  if (!state.sync.session) return;
+  const config = state.sync.config;
+  const session = state.sync.session;
+  state.sync.session = null;
+  state.sync.lastSyncedAt = '';
+  state.sync.lastError = '';
+  persistSyncState();
+  updateSyncPanel();
+  signOutRemote(config, session);
+  toast('Sesión cerrada. Los datos siguen en este teléfono.');
+}
+
+function bindSyncEvents() {
+  fillSyncFields();
+  $('#sync-signin').addEventListener('click', handleSyncSignIn);
+  $('#sync-signup').addEventListener('click', handleSyncSignUp);
+  $('#sync-now').addEventListener('click', () => syncNow('manual'));
+  $('#sync-logout').addEventListener('click', handleSyncLogout);
+  $('#sync-password').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      handleSyncSignIn();
+    }
+  });
+  updateSyncPanel();
 }
 
 function applyTheme(mode, options = {}) {
@@ -1042,6 +1355,7 @@ function renderSettings() {
     bytes = 0;
   }
   $('#storage-info').textContent = `${plural(count, 'ficha guardada', 'fichas guardadas')} · ${formatBytes(bytes)} en este teléfono.`;
+  updateSyncPanel();
 }
 
 function addWorker() {
@@ -1099,20 +1413,26 @@ function bindSettingsEvents() {
       app: 'control-fichas-corte',
       exportedAt: new Date().toISOString(),
       trabajadores: state.data.settings.trabajadores,
-      fichas: state.data.fichas
+      fichas: state.data.fichas,
+      deleted: state.data.deleted ?? {}
     };
     downloadText(JSON.stringify(backup, null, 2), `respaldo-cortes-${todayISO()}.json`, 'application/json;charset=utf-8');
     toast('Respaldo descargado.');
   });
   $('#backup-import').addEventListener('click', () => $('#backup-file').click());
   $('#backup-file').addEventListener('change', importBackup);
+  bindSyncEvents();
   $('#clear-data').addEventListener('click', () => {
     const count = state.data.fichas.length;
     if (count === 0) {
       toast('No hay fichas para borrar.');
       return;
     }
-    if (!window.confirm(`Se borrarán ${plural(count, 'ficha', 'fichas')} de este teléfono. Esta acción no se puede deshacer. ¿Continuar?`)) return;
+    if (!window.confirm(`Se borrarán ${plural(count, 'ficha', 'fichas')} de este teléfono y de los demás dispositivos sincronizados. Esta acción no se puede deshacer. ¿Continuar?`)) return;
+    const deleted = { ...(state.data.deleted ?? {}) };
+    const now = new Date().toISOString();
+    for (const ficha of state.data.fichas) deleted[ficha.id] = now;
+    state.data.deleted = deleted;
     state.data.fichas = [];
     if (!persistData()) return;
     refreshWorkerOptions();
@@ -1145,6 +1465,7 @@ async function importBackup(event) {
     if (!window.confirm(`Se reemplazarán las fichas actuales por ${plural(count, 'ficha', 'fichas')} del respaldo. ¿Continuar?`)) return;
     state.data.fichas = result.fichas;
     state.data.settings.trabajadores = result.trabajadores;
+    state.data.deleted = pruneDeleted(parsed?.deleted);
     if (!persistData()) return;
     refreshWorkerOptions();
     renderFichas();
@@ -1333,6 +1654,7 @@ async function shareFicha(ficha) {
 function deleteFicha(ficha) {
   if (!window.confirm(`¿Borrar la ficha N.º ${ficha.numero} (${ficha.modelo})? Esta acción no se puede deshacer.`)) return;
   state.data.fichas = state.data.fichas.filter((item) => item.id !== ficha.id);
+  state.data.deleted = { ...(state.data.deleted ?? {}), [ficha.id]: new Date().toISOString() };
   if (!persistData()) return;
   refreshWorkerOptions();
   renderFichas();
@@ -2102,10 +2424,20 @@ function init() {
   });
   window.addEventListener('online', updateOnlineStatus);
   window.addEventListener('offline', updateOnlineStatus);
+  window.addEventListener('online', () => {
+    if (state.sync.session) syncNow('auto');
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && state.sync.session) syncNow('auto');
+  });
+  state.syncPollTimer = window.setInterval(() => {
+    if (document.visibilityState === 'visible' && navigator.onLine && state.sync.session) syncNow('auto');
+  }, 30_000);
   window.addEventListener('hashchange', renderRoute);
   if (!location.hash) history.replaceState(null, '', '#/fichas');
   renderRoute();
   registerServiceWorker();
+  if (state.sync.session) window.setTimeout(() => syncNow('auto'), 1200);
 }
 
 init();

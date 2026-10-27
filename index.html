@@ -4,14 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Administración de Corte Sergio</title>
-  <meta name="description" content="Administración de Corte Sergio: fichas de corte y costura con colores, tallas, procesos y respaldo. Funciona sin conexión.">
+  <meta name="description" content="Administración de Corte Sergio: fichas de corte y costura con colores, tallas, procesos, respaldo y sincronización opcional entre dispositivos. Funciona sin conexión.">
   <meta name="theme-color" content="#0f766e">
   <meta name="color-scheme" content="light dark">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Corte Sergio">
   <meta name="mobile-web-app-capable" content="yes">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; form-action 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; form-action 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://*.supabase.co; manifest-src 'self'; worker-src 'self'">
   <script src="./theme-init.js"></script>
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icons/icon-192.png" sizes="192x192" type="image/png">
@@ -340,6 +340,41 @@
           <p class="muted" id="install-status"></p>
         </div>
 
+        <div class="panel" id="sync-panel">
+          <div class="panel-head">
+            <h3>Sincronización</h3>
+            <span class="muted" id="sync-badge"></span>
+          </div>
+          <p class="panel-text">Conecta un proyecto gratis de Supabase para ver las mismas fichas en la compu y en el celular. Los cambios se envían solos y también puedes sincronizar a mano.</p>
+          <div class="sync-fields">
+            <label class="sync-field">URL del proyecto
+              <input id="sync-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://tuproyecto.supabase.co">
+            </label>
+            <label class="sync-field">Clave anon (pública)
+              <input id="sync-key" type="text" autocomplete="off" spellcheck="false" placeholder="eyJhbGciOiJIUzI1NiIs...">
+            </label>
+            <label class="sync-field">Correo
+              <input id="sync-email" type="email" inputmode="email" autocomplete="username" placeholder="tu@correo.com">
+            </label>
+            <label class="sync-field">Contraseña
+              <input id="sync-password" type="password" autocomplete="current-password" placeholder="Contraseña">
+            </label>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-primary" id="sync-signin" type="button">Iniciar sesión</button>
+            <button class="btn" id="sync-signup" type="button">Crear cuenta</button>
+          </div>
+          <div class="btn-row">
+            <button class="btn" id="sync-now" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#i-database"></use></svg>
+              Sincronizar ahora
+            </button>
+            <button class="btn" id="sync-logout" type="button">Cerrar sesión</button>
+          </div>
+          <p class="muted" id="sync-status">Sin configurar.</p>
+          <p class="muted">Antes de conectar: crea el proyecto en supabase.com, ejecuta el archivo <strong>supabase-setup.sql</strong> y pega aquí la URL y la clave anon de Settings → API.</p>
+        </div>
+
         <div class="panel">
           <div class="panel-head">
             <h3>Respaldo</h3>
@@ -373,7 +408,7 @@
           <div class="panel-head">
             <h3>Acerca de</h3>
           </div>
-          <p class="panel-text">Administración de Corte Sergio · Versión 2.1</p>
+          <p class="panel-text">Administración de Corte Sergio · Versión 2.2</p>
           <p class="panel-text">Hecha para uso personal. Sin cuentas ni nube: tus datos se guardan solo en este dispositivo. Descarga un respaldo de vez en cuando.</p>
         </div>
       </section>

@@ -2,7 +2,7 @@
   "id": "./",
   "name": "Administración de Corte Sergio",
   "short_name": "Corte Sergio",
-  "description": "Administración de Corte Sergio: fichas de corte y costura con colores, tallas, procesos, responsables, reportes y respaldo. Funciona sin conexión.",
+  "description": "Administración de Corte Sergio: fichas de corte y costura con colores, tallas, procesos, responsables, reportes, respaldo y sincronización opcional. Funciona sin conexión.",
   "lang": "es",
   "dir": "ltr",
   "start_url": "./",
