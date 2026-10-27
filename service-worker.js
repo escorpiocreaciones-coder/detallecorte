@@ -1,13 +1,13 @@
-const CACHE_NAME = 'control-cortes-v6';
+const CACHE_NAME = 'control-cortes-v7';
 const APP_SHELL = [
   './',
   './index.html',
-  './styles.css',
-  './app.js',
-  './theme-init.js',
+  './styles.css?v=2.2.0',
+  './app.js?v=2.2.0',
+  './theme-init.js?v=2.2.0',
   './js/core.js',
   './js/sync.js',
-  './manifest.webmanifest',
+  './manifest.webmanifest?v=2.2.0',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/maskable-512.png',
@@ -50,17 +50,14 @@ self.addEventListener('fetch', (event) => {
   }
 
   event.respondWith(
-    caches.match(request).then((cached) => {
-      if (cached) return cached;
-      return fetch(request)
-        .then((response) => {
-          if (response.ok && response.type === 'basic') {
-            const copy = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
-          }
-          return response;
-        })
-        .catch(() => caches.match('./index.html'));
-    })
+    fetch(request)
+      .then((response) => {
+        if (response.ok && response.type === 'basic') {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+        }
+        return response;
+      })
+      .catch(async () => (await caches.match(request)) || Response.error())
   );
 });

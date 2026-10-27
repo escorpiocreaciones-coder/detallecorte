@@ -2404,7 +2404,7 @@ function setupInstallEvents() {
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator) || !/^https?:$/.test(location.protocol)) return;
   const register = () => {
-    navigator.serviceWorker.register('./service-worker.js').catch(() => {});
+    navigator.serviceWorker.register('./service-worker.js', { updateViaCache: 'none' }).catch(() => {});
   };
   if (document.readyState === 'complete') register();
   else window.addEventListener('load', register, { once: true });
