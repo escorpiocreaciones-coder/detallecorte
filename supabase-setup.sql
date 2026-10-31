@@ -1,12 +1,15 @@
 -- ============================================================
--- Corte Sergio 3.0 - Backend central para suscripciones
+-- Corte Sergio 3.1 - Backend central para suscripciones
 -- ============================================================
 -- 1. Crea un proyecto en https://supabase.com
 -- 2. Abre SQL Editor, pega TODO este archivo y presiona Run.
 -- 3. En Project Settings -> API copia la URL y la clave "anon public".
 -- 4. Pega esos valores en config.js.
--- 5. Crea tu cuenta desde la app, confirma el correo y luego ejecuta
---    al final de este archivo el INSERT de administrador con tu correo.
+-- 5. Habilita Authentication -> Providers -> Anonymous sign-ins.
+-- 6. Los clientes entran con un código de acceso generado en admin.html.
+--    Cada código es de un solo uso y la duración empieza al canjearlo.
+-- 7. Para crear otra cuenta administradora, crea el usuario en
+--    Authentication -> Users y ejecuta el INSERT de administrador del final.
 --
 -- IMPORTANTE: este script no borra datos existentes. La tabla antigua
 -- corte_sync queda intacta por si necesitas recuperar respaldos.
