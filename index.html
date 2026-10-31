@@ -12,13 +12,14 @@
   <meta name="apple-mobile-web-app-title" content="Corte Sergio">
   <meta name="mobile-web-app-capable" content="yes">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; form-action 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://*.supabase.co; manifest-src 'self'; worker-src 'self'">
-  <script src="./theme-init.js?v=2.2.0"></script>
-  <link rel="manifest" href="./manifest.webmanifest?v=2.2.0">
+  <script src="./theme-init.js?v=3.0.0"></script>
+  <link rel="manifest" href="./manifest.webmanifest?v=3.0.0">
   <link rel="icon" href="./icons/icon-192.png" sizes="192x192" type="image/png">
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="./styles.css?v=2.2.0">
+  <link rel="stylesheet" href="./styles.css?v=3.0.0">
 </head>
 <body>
+  <div id="access-gate" class="access-gate" hidden></div>
   <a class="skip-link" href="#main">Saltar al contenido</a>
 
   <svg class="svg-sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -313,7 +314,7 @@
           </div>
         </div>
 
-        <div class="panel">
+        <div class="panel" id="workers-panel">
           <div class="panel-head">
             <h3>Trabajadores</h3>
           </div>
@@ -340,42 +341,53 @@
           <p class="muted" id="install-status"></p>
         </div>
 
-        <div class="panel" id="sync-panel">
+        <div class="panel" id="account-panel">
           <div class="panel-head">
-            <h3>Sincronización</h3>
-            <span class="muted" id="sync-badge"></span>
+            <h3>Cuenta y suscripción</h3>
+            <span class="muted" id="account-badge"></span>
           </div>
-          <p class="panel-text">Conecta un proyecto gratis de Supabase para ver las mismas fichas en la compu y en el celular. Los cambios se envían solos y también puedes sincronizar a mano.</p>
-          <div class="sync-fields">
-            <label class="sync-field">URL del proyecto
-              <input id="sync-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://tuproyecto.supabase.co">
-            </label>
-            <label class="sync-field">Clave anon (pública)
-              <input id="sync-key" type="text" autocomplete="off" spellcheck="false" placeholder="eyJhbGciOiJIUzI1NiIs...">
-            </label>
-            <label class="sync-field">Correo
-              <input id="sync-email" type="email" inputmode="email" autocomplete="username" placeholder="tu@correo.com">
-            </label>
-            <label class="sync-field">Contraseña
-              <input id="sync-password" type="password" autocomplete="current-password" placeholder="Contraseña">
-            </label>
-          </div>
-          <div class="btn-row">
-            <button class="btn btn-primary" id="sync-signin" type="button">Iniciar sesión</button>
-            <button class="btn" id="sync-signup" type="button">Crear cuenta</button>
-          </div>
-          <div class="btn-row">
-            <button class="btn" id="sync-now" type="button">
-              <svg class="icon" aria-hidden="true"><use href="#i-database"></use></svg>
-              Sincronizar ahora
-            </button>
-            <button class="btn" id="sync-logout" type="button">Cerrar sesión</button>
-          </div>
-          <p class="muted" id="sync-status">Sin configurar.</p>
-          <p class="muted">Antes de conectar: crea el proyecto en supabase.com, ejecuta el archivo <strong>supabase-setup.sql</strong> y pega aquí la URL y la clave anon de Settings → API.</p>
+          <div id="account-summary"></div>
+          <div class="btn-row" id="account-actions"></div>
+          <p class="muted" id="account-status"></p>
+          <div id="account-payments"></div>
         </div>
 
-        <div class="panel">
+        <div class="panel" id="team-panel" hidden>
+          <div class="panel-head">
+            <h3>Equipo</h3>
+            <span class="muted" id="team-count"></span>
+          </div>
+          <p class="panel-text">Invita a tus empleados para que trabajen con las mismas fichas. Cada persona tiene su propia cuenta y acceso según su rol.</p>
+          <div class="field" id="business-name-field" hidden>
+            <span class="field-label">Nombre del negocio</span>
+            <div class="inline-field">
+              <input id="business-name" type="text" maxlength="120" autocomplete="organization">
+              <button class="btn" id="business-rename" type="button">Guardar</button>
+            </div>
+          </div>
+          <div id="team-list" class="team-list"></div>
+          <div class="invite-box" id="invite-box" hidden>
+            <h4>Nueva invitación</h4>
+            <div class="form-grid two">
+              <label class="field">
+                <span class="field-label">Correo (opcional)</span>
+                <input id="invite-email" type="email" inputmode="email" autocomplete="off" placeholder="empleado@correo.com">
+              </label>
+              <label class="field">
+                <span class="field-label">Rol</span>
+                <select id="invite-role">
+                  <option value="employee">Empleado</option>
+                  <option value="admin">Administrador</option>
+                </select>
+              </label>
+            </div>
+            <button class="btn btn-primary" id="invite-create" type="button">Crear invitación</button>
+          </div>
+          <div id="invite-result"></div>
+          <div id="invite-list"></div>
+        </div>
+
+        <div class="panel" id="backup-panel">
           <div class="panel-head">
             <h3>Respaldo</h3>
           </div>
@@ -393,7 +405,7 @@
           <input type="file" id="backup-file" accept=".json,application/json" hidden>
         </div>
 
-        <div class="panel">
+        <div class="panel" id="data-panel">
           <div class="panel-head">
             <h3>Datos en este teléfono</h3>
           </div>
@@ -408,8 +420,8 @@
           <div class="panel-head">
             <h3>Acerca de</h3>
           </div>
-          <p class="panel-text">Administración de Corte Sergio · Versión 2.2</p>
-          <p class="panel-text">Hecha para uso personal. Sin cuentas ni nube: tus datos se guardan solo en este dispositivo. Descarga un respaldo de vez en cuando.</p>
+          <p class="panel-text">Administración de Corte Sergio · Versión 3.0</p>
+          <p class="panel-text">Tu suscripción incluye sincronización en la nube, equipo con roles y respaldos. La app sigue funcionando sin conexión.</p>
         </div>
       </section>
     </main>
@@ -440,6 +452,6 @@
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div id="print-area" class="print-area" aria-hidden="true"></div>
 
-  <script type="module" src="./app.js?v=2.2.0"></script>
+  <script type="module" src="./app.js?v=3.0.0"></script>
 </body>
 </html>

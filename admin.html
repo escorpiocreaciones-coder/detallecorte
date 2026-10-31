@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Panel del vendedor · Corte Sergio</title>
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#0f766e">
+  <meta name="color-scheme" content="light dark">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; form-action 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://*.supabase.co; manifest-src 'self'; worker-src 'self'">
+  <script src="./theme-init.js?v=3.0.0"></script>
+  <link rel="icon" href="./icons/icon-192.png" sizes="192x192" type="image/png">
+  <link rel="stylesheet" href="./styles.css?v=3.0.0">
+  <link rel="stylesheet" href="./admin.css?v=3.0.0">
+</head>
+<body class="admin-body">
+  <section class="admin-login" id="admin-login" hidden>
+    <div class="admin-login-card">
+      <div class="gate-brand">
+        <img src="./icons/icon-192.png" alt="" width="52" height="52">
+        <div>
+          <p class="eyebrow">Corte Sergio</p>
+          <h1>Panel del vendedor</h1>
+        </div>
+      </div>
+      <p class="muted">Ingresa con tu cuenta de administrador para gestionar negocios, licencias y pagos.</p>
+      <p class="form-alert" id="admin-login-error" hidden></p>
+      <form id="admin-login-form" class="gate-form" novalidate>
+        <label class="field">Correo
+          <input id="admin-email" type="email" inputmode="email" autocomplete="username" placeholder="tu@correo.com" required>
+        </label>
+        <label class="field">Contraseña
+          <input id="admin-password" type="password" autocomplete="current-password" placeholder="Tu contraseña" required>
+        </label>
+        <button class="btn btn-primary gate-submit" id="admin-login-btn" type="submit">Entrar al panel</button>
+      </form>
+      <p class="muted admin-back"><a href="./index.html">Volver a la app</a></p>
+    </div>
+  </section>
+
+  <section class="admin-login" id="admin-loading">
+    <div class="admin-login-card admin-loading-card">
+      <div class="gate-spinner" aria-hidden="true"></div>
+      <p class="muted">Verificando tu cuenta de administrador…</p>
+    </div>
+  </section>
+
+  <section class="admin-setup" id="admin-setup" hidden>
+    <div class="admin-login-card">
+      <h1>Falta configurar Supabase</h1>
+      <p class="muted">Abre <strong>config.js</strong>, pega la URL y la clave anon de tu proyecto, ejecuta <strong>supabase-setup.sql</strong> y vuelve a cargar esta página.</p>
+      <a class="btn" href="./index.html">Volver a la app</a>
+    </div>
+  </section>
+
+  <div class="admin-shell" id="admin-shell" hidden>
+    <header class="admin-header">
+      <div class="admin-brand">
+        <img src="./icons/icon-192.png" alt="" width="40" height="40">
+        <div>
+          <p class="eyebrow">Corte Sergio</p>
+          <h1>Panel del vendedor</h1>
+        </div>
+      </div>
+      <div class="admin-header-actions">
+        <span class="admin-user" id="admin-user"></span>
+        <button class="btn btn-small" id="admin-refresh" type="button">Actualizar</button>
+        <a class="btn btn-small" href="./index.html">Ir a la app</a>
+        <button class="btn btn-small btn-danger" id="admin-logout" type="button">Salir</button>
+      </div>
+    </header>
+
+    <main class="admin-main">
+      <p class="form-alert" id="admin-error" hidden></p>
+      <section class="metrics" id="admin-metrics" aria-label="Resumen"></section>
+
+      <section class="panel admin-panel">
+        <div class="admin-toolbar">
+          <div>
+            <h2>Negocios</h2>
+            <p class="muted" id="admin-count">0 negocios</p>
+          </div>
+          <form id="admin-search" class="admin-search">
+            <input id="admin-search-input" type="search" placeholder="Buscar negocio o correo" aria-label="Buscar negocio o correo">
+            <button class="btn btn-primary btn-small" type="submit">Buscar</button>
+          </form>
+        </div>
+        <div class="admin-table-wrap">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>Negocio</th>
+                <th>Dueño</th>
+                <th>Plan</th>
+                <th>Estado</th>
+                <th>Miembros</th>
+                <th>Vence</th>
+                <th>Monto</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="admin-tenants">
+              <tr><td colspan="8" class="muted">Cargando negocios…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel admin-panel">
+        <details>
+          <summary><strong>Administradores del vendedor</strong></summary>
+          <p class="muted">Solo estas cuentas pueden entrar al panel y modificar licencias o pagos.</p>
+          <div id="admin-admins" class="admin-admins"></div>
+          <form id="admin-add-form" class="admin-add-form">
+            <input id="admin-add-email" type="email" inputmode="email" placeholder="correo@administrador.com" aria-label="Correo del nuevo administrador">
+            <button class="btn btn-small" type="submit">Agregar administrador</button>
+          </form>
+        </details>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="tenant-dialog" class="tenant-dialog">
+    <div class="tenant-dialog-head">
+      <h2 id="tenant-dialog-title">Negocio</h2>
+      <button class="icon-btn" id="tenant-dialog-close" type="button" aria-label="Cerrar">✕</button>
+    </div>
+    <div id="tenant-detail" class="tenant-detail"></div>
+  </dialog>
+
+  <div class="toast" id="admin-toast" role="status" aria-live="polite"></div>
+
+  <script type="module" src="./js/admin.js?v=3.0.0"></script>
+</body>
+</html>

@@ -34,24 +34,35 @@ import {
   uid,
   validateBackup
 } from './js/core.js';
+import { APP_CONFIG, BACKEND_READY, backendConfig } from './config.js';
 import {
   dataSignature,
-  isValidSupabaseUrl,
-  loadSyncState,
+  fetchMe,
+  loadAuthState,
   mergeData,
-  normalizeSupabaseUrl,
   pruneDeleted,
-  pullData,
-  pushData,
+  pullTenantData,
+  pushTenantData,
   refreshSession,
-  sanitizeDeleted,
-  saveSyncState,
+  renameTenant,
+  resetPassword,
+  saveAuthState,
   signIn,
   signOutRemote,
-  signUp
+  signUp,
+  subscriptionEvents,
+  tenantMembers,
+  tenantInvitations,
+  createInvitation,
+  revokeInvitation,
+  setMemberRole,
+  removeMember
 } from './js/sync.js';
+import { accessWarning, evaluateAccess, planLabel, statusLabel as licenseStatusLabel } from './js/license.js';
+import { can, isManager, roleLabel } from './js/permissions.js';
 
-const STORAGE_KEY = 'control-cortes.v1';
+const LEGACY_STORAGE_KEY = 'control-cortes.v1';
+const TENANT_STORAGE_PREFIX = 'control-cortes.tenant.';
 const THEME_KEY = 'control-cortes.theme';
 const VALID_THEMES = ['auto', 'light', 'dark'];
 const QUICK_SIZES = ['M', 'G', 'GG', 'S', 'L', 'XL', 'XXL', 'Único'];
@@ -67,6 +78,10 @@ const darkMedia = window.matchMedia('(prefers-color-scheme: dark)');
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 
+const authState = loadAuthState();
+
+let activeDataKey = LEGACY_STORAGE_KEY;
+
 const state = {
   data: loadData(),
   query: '',
@@ -79,14 +94,47 @@ const state = {
   sheet: null,
   deferredPrompt: null,
   toastTimer: null,
-  sync: loadSyncState(),
+  sync: { ...authState, lastError: '' },
   syncBusy: false,
   syncQueued: false,
   syncPushTimer: null,
-  syncPollTimer: null
+  syncPollTimer: null,
+  authBusy: false,
+  authTab: 'login',
+  authError: '',
+  authNotice: '',
+  pendingInvite: readInviteFromUrl(),
+  access: { active: !BACKEND_READY, localMode: !BACKEND_READY, checking: BACKEND_READY },
+  team: { members: [], invitations: [], loaded: false, busy: false, error: '', inviteResult: null },
+  payments: { loaded: false, rows: [] },
+  accountBusy: false
 };
 
+state.authTab = state.pendingInvite ? 'signup' : 'login';
+
+if (authState.session && authState.me?.tenant_id) {
+  activeDataKey = tenantDataKey(authState.me.tenant_id);
+  state.data = loadData(activeDataKey);
+}
+
 let lastFocus = null;
+
+function readInviteFromUrl() {
+  try {
+    return new URLSearchParams(location.search).get('invite') || '';
+  } catch {
+    return '';
+  }
+}
+
+function clearInviteFromUrl() {
+  try {
+    const url = new URL(location.href);
+    if (!url.searchParams.has('invite')) return;
+    url.searchParams.delete('invite');
+    history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+  } catch {}
+}
 
 function storedTheme() {
   try {
@@ -97,7 +145,7 @@ function storedTheme() {
   }
 }
 
-function loadData() {
+function loadData(key = LEGACY_STORAGE_KEY) {
   const fallback = {
     version: DATA_VERSION,
     fichas: [],
@@ -105,7 +153,7 @@ function loadData() {
     deleted: {}
   };
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(key);
     if (!raw) return fallback;
     const parsed = JSON.parse(raw);
     if (!parsed || !Array.isArray(parsed.fichas)) return fallback;
@@ -134,9 +182,30 @@ function loadData() {
   }
 }
 
+function tenantDataKey(tenantId) {
+  return tenantId ? `${TENANT_STORAGE_PREFIX}${tenantId}` : LEGACY_STORAGE_KEY;
+}
+
+function activateTenant(tenantId) {
+  const nextKey = tenantDataKey(tenantId);
+  if (nextKey === activeDataKey) return;
+  let hasNext = false;
+  try {
+    hasNext = Boolean(localStorage.getItem(nextKey));
+    if (!hasNext && tenantId && activeDataKey === LEGACY_STORAGE_KEY && state.data.fichas.length > 0) {
+      localStorage.setItem(nextKey, JSON.stringify(state.data));
+      hasNext = true;
+    }
+  } catch {}
+  activeDataKey = nextKey;
+  state.data = loadData(nextKey);
+  state.team = { members: [], invitations: [], loaded: false, busy: false, error: '', inviteResult: null };
+  state.payments = { loaded: false, rows: [] };
+}
+
 function persistData(options = {}) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.data));
+    localStorage.setItem(activeDataKey, JSON.stringify(state.data));
     if (!options.fromSync) scheduleSyncPush();
     return true;
   } catch {
@@ -147,7 +216,7 @@ function persistData(options = {}) {
 
 function persistMigrationIfNeeded() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(activeDataKey);
     if (!raw) return;
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed?.fichas) && parsed.version !== DATA_VERSION) persistData();
@@ -155,16 +224,29 @@ function persistMigrationIfNeeded() {
 }
 
 function persistSyncState() {
-  saveSyncState({
-    config: state.sync.config,
+  saveAuthState({
     session: state.sync.session,
-    lastSyncedAt: state.sync.lastSyncedAt,
-    lastError: state.sync.lastError
+    me: state.sync.me,
+    verifiedAt: state.sync.verifiedAt,
+    lastSyncedAt: state.sync.lastSyncedAt
   });
 }
 
-function syncConfigured() {
-  return Boolean(state.sync.config.url && state.sync.config.anonKey);
+function syncReady() {
+  return Boolean(BACKEND_READY && state.sync.session?.accessToken && state.sync.me?.tenant_id);
+}
+
+function currentRole() {
+  return state.sync.me?.role || (BACKEND_READY ? '' : 'owner');
+}
+
+function canDo(action) {
+  if (!BACKEND_READY) return true;
+  return can(currentRole(), action, { isAppAdmin: Boolean(state.sync.me?.is_app_admin) });
+}
+
+function currentIsManager() {
+  return Boolean(state.sync.me?.is_app_admin) || isManager(currentRole());
 }
 
 function syncPayload() {
@@ -176,17 +258,34 @@ function syncPayload() {
   };
 }
 
+function friendlyAuthError(error) {
+  const message = String(error?.message ?? '').trim();
+  if (!message) return 'No se pudo completar la operación.';
+  if (error?.offline || /failed to fetch|networkerror|load failed|fetch/i.test(message)) {
+    return 'No se pudo conectar. Revisa tu internet e intenta de nuevo.';
+  }
+  if (/invalid login credentials/i.test(message)) return 'Correo o contraseña incorrectos.';
+  if (/email not confirmed/i.test(message)) return 'Confirma tu correo con el enlace que enviamos.';
+  if (/user already registered|already been registered/i.test(message)) return 'Ese correo ya tiene cuenta. Inicia sesión.';
+  if (/password should be at least/i.test(message)) return 'La contraseña debe tener al menos 6 caracteres.';
+  if (/signups not allowed|signup is disabled/i.test(message)) return 'El registro está desactivado. Contacta al soporte.';
+  if (/for security purposes|rate limit|too many/i.test(message)) return 'Demasiados intentos. Espera un momento.';
+  if (/database error|trigger|invitaci/i.test(message)) {
+    return 'No se pudo crear la cuenta. Revisa que supabase-setup.sql esté ejecutado o pide una invitación nueva.';
+  }
+  return message;
+}
+
 function friendlySyncError(error) {
   const message = String(error?.message ?? '').trim();
   if (!message) return 'Error de sincronización.';
   if (error?.offline || /failed to fetch|networkerror|load failed|fetch/i.test(message)) {
-    return 'No se pudo conectar con Supabase. Revisa tu internet.';
+    return 'No se pudo conectar. Revisa tu internet.';
   }
   if (/invalid login credentials/i.test(message)) return 'Correo o contraseña incorrectos.';
-  if (/email not confirmed/i.test(message)) return 'Confirma tu correo con el enlace que envió Supabase.';
-  if (/user already registered|already been registered/i.test(message)) return 'Ese correo ya tiene cuenta. Usa Iniciar sesión.';
+  if (/email not confirmed/i.test(message)) return 'Confirma tu correo con el enlace que enviamos.';
   if (/row-level security|permission denied/i.test(message)) return 'Falta ejecutar supabase-setup.sql en Supabase.';
-  if (/relation .* does not exist|does not exist/i.test(message)) return 'Falta crear la tabla corte_sync con supabase-setup.sql.';
+  if (/relation .* does not exist|does not exist/i.test(message)) return 'Falta crear las tablas con supabase-setup.sql.';
   if (/invalid refresh token|refresh token not found|jwt expired|invalid jwt/i.test(message)) {
     return 'La sesión expiró. Inicia sesión de nuevo.';
   }
@@ -198,95 +297,46 @@ function isAuthFailure(error) {
   return /invalid refresh token|refresh token not found|jwt expired|invalid jwt|session.*expir/i.test(String(error?.message ?? ''));
 }
 
-let syncFieldsFilled = false;
-
-function fillSyncFields() {
-  if (syncFieldsFilled) return;
-  syncFieldsFilled = true;
-  const urlInput = $('#sync-url');
-  const keyInput = $('#sync-key');
-  const emailInput = $('#sync-email');
-  if (urlInput && state.sync.config.url) urlInput.value = state.sync.config.url;
-  if (keyInput && state.sync.config.anonKey) keyInput.value = state.sync.config.anonKey;
-  if (emailInput && state.sync.session?.email) emailInput.value = state.sync.session.email;
-}
-
-function updateSyncPanel() {
-  const status = $('#sync-status');
-  if (!status) return;
-  const signedIn = Boolean(state.sync.session?.accessToken);
-  let text = '';
-  if (state.syncBusy) {
-    text = 'Sincronizando…';
-  } else if (!syncConfigured()) {
-    text = 'Sin configurar: pega la URL y la clave anon de tu proyecto Supabase.';
-  } else if (!signedIn) {
-    text = 'Configurado, sin sesión. Inicia sesión o crea la cuenta.';
-  } else {
-    const last = state.sync.lastSyncedAt ? formatDateTime(state.sync.lastSyncedAt) : 'nunca';
-    text = `Conectado como ${state.sync.session.email || 'tu cuenta'}. Última sincronización: ${last}.`;
-  }
-  if (state.sync.lastError) text += ` ${state.sync.lastError}`;
-  status.textContent = text;
-
-  const badge = $('#sync-badge');
-  if (badge) {
-    badge.textContent = state.syncBusy
-      ? 'Sincronizando'
-      : (signedIn ? 'Conectado' : (syncConfigured() ? 'Sin sesión' : 'Sin configurar'));
-  }
-  const nowButton = $('#sync-now');
-  if (nowButton) nowButton.disabled = !signedIn || state.syncBusy;
-  const logoutButton = $('#sync-logout');
-  if (logoutButton) logoutButton.disabled = !signedIn || state.syncBusy;
-  const signinButton = $('#sync-signin');
-  if (signinButton) signinButton.disabled = state.syncBusy;
-  const signupButton = $('#sync-signup');
-  if (signupButton) signupButton.disabled = state.syncBusy;
-}
-
-function applySyncConfigFromInputs() {
-  const url = normalizeSupabaseUrl($('#sync-url').value);
-  const anonKey = $('#sync-key').value.trim();
-  if (!isValidSupabaseUrl(url)) {
-    toast('Pega la URL del proyecto: https://tuproyecto.supabase.co');
-    return null;
-  }
-  if (anonKey.length < 20) {
-    toast('Pega la clave anon de Supabase (Settings → API).');
-    return null;
-  }
-  const changed = state.sync.config.url !== url || state.sync.config.anonKey !== anonKey;
-  if (changed) {
-    if (state.sync.session) toast('Cambiaste de proyecto. Inicia sesión de nuevo.');
-    state.sync.config = { url, anonKey };
-    state.sync.session = null;
-    state.sync.lastSyncedAt = '';
-    state.sync.lastError = '';
-    persistSyncState();
-  }
-  return state.sync.config;
-}
-
 async function ensureFreshSession() {
   const session = state.sync.session;
   if (!session) throw new Error('Inicia sesión para sincronizar.');
   if (!session.expiresAt || Date.now() < session.expiresAt - 60_000) return session;
-  const next = await refreshSession(state.sync.config, session);
+  const next = await refreshSession(backendConfig(), session);
   state.sync.session = next;
   persistSyncState();
   return next;
 }
 
 function scheduleSyncPush() {
-  if (!state.sync.session || !syncConfigured()) return;
+  if (!syncReady() || !state.access.active || !navigator.onLine) return;
   window.clearTimeout(state.syncPushTimer);
   state.syncPushTimer = window.setTimeout(() => syncNow('auto'), 1800);
 }
 
+async function pullTenantReadOnly() {
+  if (!syncReady() || !navigator.onLine) return false;
+  try {
+    const session = await ensureFreshSession();
+    const remote = await pullTenantData(backendConfig(), session, state.sync.me.tenant_id);
+    const merged = mergeData(state.data, remote);
+    if (dataSignature(merged) !== dataSignature(state.data)) {
+      state.data = merged;
+      persistData({ fromSync: true });
+      refreshWorkerOptions();
+      renderFichas();
+      renderReports();
+      renderSettings();
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function syncNow(source = 'auto') {
-  if (!syncConfigured() || !state.sync.session) {
-    if (source === 'manual') toast('Configura Supabase e inicia sesión primero.');
+  if (!BACKEND_READY) return;
+  if (!state.sync.session || !state.sync.me?.tenant_id) {
+    if (source === 'manual') toast('Inicia sesión primero.');
     return;
   }
   if (state.syncBusy) {
@@ -295,15 +345,24 @@ async function syncNow(source = 'auto') {
   }
   if (!navigator.onLine) {
     if (source === 'manual') toast('Sin conexión. Se sincronizará cuando vuelva internet.');
-    updateSyncPanel();
+    renderAccountPanel();
     return;
   }
   state.syncBusy = true;
   state.sync.lastError = '';
-  updateSyncPanel();
+  renderAccountPanel();
   try {
     const session = await ensureFreshSession();
-    const remote = await pullData(state.sync.config, session);
+    const config = backendConfig();
+    const me = await fetchMe(config, session);
+    state.sync.me = me;
+    state.sync.verifiedAt = new Date().toISOString();
+    persistSyncState();
+    activateTenant(me.tenant_id);
+    const access = evaluateAccess(me, { offline: false, graceDays: APP_CONFIG.offlineGraceDays });
+    setAccess(access);
+
+    const remote = await pullTenantData(config, session, me.tenant_id);
     const localSig = dataSignature(state.data);
     const remoteSig = remote ? dataSignature(remote) : '';
     const merged = mergeData(state.data, remote);
@@ -317,8 +376,8 @@ async function syncNow(source = 'auto') {
       renderReports();
       renderSettings();
     }
-    if (mergedSig !== remoteSig) {
-      await pushData(state.sync.config, session, syncPayload());
+    if (access.active && mergedSig !== remoteSig) {
+      await pushTenantData(config, session, me.tenant_id, syncPayload());
     }
     state.sync.lastSyncedAt = new Date().toISOString();
     state.sync.lastError = '';
@@ -326,11 +385,7 @@ async function syncNow(source = 'auto') {
     if (source === 'manual' || source === 'login' || source === 'signup') toast('Datos sincronizados.');
   } catch (error) {
     if (isAuthFailure(error)) {
-      state.sync.session = null;
-      state.sync.lastError = 'La sesión expiró. Inicia sesión de nuevo.';
-      state.sync.lastSyncedAt = '';
-      persistSyncState();
-      if (source !== 'auto') toast(state.sync.lastError);
+      clearSession('La sesión expiró. Inicia sesión de nuevo.');
     } else {
       state.sync.lastError = friendlySyncError(error);
       persistSyncState();
@@ -340,103 +395,573 @@ async function syncNow(source = 'auto') {
     }
   } finally {
     state.syncBusy = false;
-    updateSyncPanel();
+    renderAccountPanel();
     if (state.syncQueued) {
       state.syncQueued = false;
-      window.setTimeout(() => syncNow('auto'), 800);
+      window.setTimeout(() => syncNow('auto'), 1200);
     }
   }
 }
 
-async function handleSyncSignIn() {
-  if (state.syncBusy) return;
-  const config = applySyncConfigFromInputs();
-  if (!config) return;
-  const email = $('#sync-email').value.trim();
-  const password = $('#sync-password').value;
-  if (!email || !password) {
-    toast('Escribe el correo y la contraseña.');
-    return;
-  }
-  state.syncBusy = true;
-  state.sync.lastError = '';
-  updateSyncPanel();
-  let session = null;
+async function verifyAccount(options = {}) {
+  if (!BACKEND_READY || !state.sync.session) return null;
+  const silent = Boolean(options.silent);
+  state.accountBusy = true;
+  renderAccountPanel();
   try {
-    session = await signIn(config, email, password);
-    state.sync.session = session;
+    const session = await ensureFreshSession();
+    const me = await fetchMe(backendConfig(), session);
+    state.sync.me = me;
+    state.sync.verifiedAt = new Date().toISOString();
+    state.sync.lastError = '';
     persistSyncState();
-    $('#sync-password').value = '';
-  } catch (error) {
-    state.sync.lastError = friendlySyncError(error);
-    toast(state.sync.lastError);
-  } finally {
-    state.syncBusy = false;
-    updateSyncPanel();
-  }
-  if (session) await syncNow('login');
-}
-
-async function handleSyncSignUp() {
-  if (state.syncBusy) return;
-  const config = applySyncConfigFromInputs();
-  if (!config) return;
-  const email = $('#sync-email').value.trim();
-  const password = $('#sync-password').value;
-  if (!email || !password) {
-    toast('Escribe el correo y una contraseña.');
-    return;
-  }
-  state.syncBusy = true;
-  state.sync.lastError = '';
-  updateSyncPanel();
-  let session = null;
-  try {
-    const result = await signUp(config, email, password);
-    session = result.session;
-    if (session) {
-      state.sync.session = session;
-      persistSyncState();
-      $('#sync-password').value = '';
-    } else {
-      toast('Cuenta creada. Confirma tu correo y luego inicia sesión.');
+    activateTenant(me.tenant_id);
+    const access = evaluateAccess(me, { offline: !navigator.onLine, graceDays: APP_CONFIG.offlineGraceDays });
+    setAccess(access);
+    renderSettings();
+    if (access.active) {
+      hideAccessGate();
+      if (!silent) toast('Suscripción verificada.');
+      await syncNow('license');
+    } else if (!silent) {
+      toast('Todavía no aparece una suscripción activa.');
     }
+    return access;
   } catch (error) {
-    state.sync.lastError = friendlySyncError(error);
-    toast(state.sync.lastError);
+    if (isAuthFailure(error)) {
+      clearSession('La sesión expiró. Inicia sesión de nuevo.');
+    } else if (!silent) {
+      toast(friendlyAuthError(error));
+    }
+    return null;
   } finally {
-    state.syncBusy = false;
-    updateSyncPanel();
+    state.accountBusy = false;
+    renderAccountPanel();
   }
-  if (session) await syncNow('signup');
 }
 
-function handleSyncLogout() {
-  if (!state.sync.session) return;
-  const config = state.sync.config;
+function clearSession(message = '') {
+  const config = backendConfig();
   const session = state.sync.session;
   state.sync.session = null;
+  state.sync.me = null;
+  state.sync.verifiedAt = '';
   state.sync.lastSyncedAt = '';
   state.sync.lastError = '';
+  state.accountBusy = false;
+  state.team = { members: [], invitations: [], loaded: false, busy: false, error: '', inviteResult: null };
+  state.payments = { loaded: false, rows: [] };
   persistSyncState();
-  updateSyncPanel();
-  signOutRemote(config, session);
-  toast('Sesión cerrada. Los datos siguen en este teléfono.');
+  if (session) signOutRemote(config, session);
+  closeSheet(false);
+  showAuthGate(message);
+  renderAccountPanel();
 }
 
-function bindSyncEvents() {
-  fillSyncFields();
-  $('#sync-signin').addEventListener('click', handleSyncSignIn);
-  $('#sync-signup').addEventListener('click', handleSyncSignUp);
-  $('#sync-now').addEventListener('click', () => syncNow('manual'));
-  $('#sync-logout').addEventListener('click', handleSyncLogout);
-  $('#sync-password').addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      handleSyncSignIn();
+function handleSignOut() {
+  clearSession('');
+  toast('Sesión cerrada. Tus datos siguen en este teléfono.');
+}
+
+function supportContact() {
+  const whatsapp = String(APP_CONFIG.supportWhatsApp || '').replace(/\D/g, '');
+  if (whatsapp) return `https://wa.me/${whatsapp}`;
+  if (APP_CONFIG.supportEmail) return `mailto:${APP_CONFIG.supportEmail}`;
+  return '';
+}
+
+function openCheckout(plan) {
+  const url = plan === 'yearly' ? APP_CONFIG.checkoutYearlyUrl : APP_CONFIG.checkoutMonthlyUrl;
+  if (url) {
+    window.open(url, '_blank', 'noopener');
+    return;
+  }
+  const contact = supportContact();
+  if (contact) {
+    const business = state.sync.me?.tenant_name || 'mi negocio';
+    const text = encodeURIComponent(`Hola, quiero activar el plan ${planLabel(plan)} de ${APP_CONFIG.appName} para ${business}.`);
+    window.open(contact.startsWith('mailto:') ? `${contact}?subject=${encodeURIComponent('Suscripción Corte Sergio')}&body=${text}` : `${contact}?text=${text}`, '_blank', 'noopener');
+    return;
+  }
+  toast('El pago todavía no está configurado. Escribe al soporte.');
+}
+
+function exportBackup() {
+  const backup = {
+    version: DATA_VERSION,
+    app: 'control-fichas-corte',
+    exportedAt: new Date().toISOString(),
+    trabajadores: state.data.settings.trabajadores,
+    fichas: state.data.fichas,
+    deleted: state.data.deleted ?? {}
+  };
+  downloadText(JSON.stringify(backup, null, 2), `respaldo-cortes-${todayISO()}.json`, 'application/json;charset=utf-8');
+  toast('Respaldo descargado.');
+}
+
+async function handleGateSignIn() {
+  if (state.authBusy) return;
+  const email = String($('#gate-email')?.value ?? '').trim();
+  const password = String($('#gate-password')?.value ?? '');
+  if (!email || !password) {
+    state.authError = 'Escribe tu correo y contraseña.';
+    showAuthGate();
+    return;
+  }
+  state.authBusy = true;
+  state.authError = '';
+  state.authNotice = '';
+  showLoadingGate('Entrando a tu cuenta…');
+  try {
+    const session = await signIn(backendConfig(), email, password);
+    state.authBusy = false;
+    await finishAuthentication(session, 'login');
+  } catch (error) {
+    state.authBusy = false;
+    state.authError = friendlyAuthError(error);
+    showAuthGate();
+  }
+}
+
+async function handleGateSignUp() {
+  if (state.authBusy) return;
+  const fullName = String($('#gate-fullname')?.value ?? '').trim();
+  const tenantName = String($('#gate-tenant')?.value ?? '').trim();
+  const email = String($('#gate-email')?.value ?? '').trim();
+  const password = String($('#gate-password')?.value ?? '');
+  const inviteCode = String($('#gate-invite')?.value ?? '').trim() || state.pendingInvite;
+  if (!email || !password) {
+    state.authError = 'Escribe tu correo y una contraseña.';
+    showAuthGate();
+    return;
+  }
+  if (password.length < 6) {
+    state.authError = 'La contraseña debe tener al menos 6 caracteres.';
+    showAuthGate();
+    return;
+  }
+  if (!inviteCode && !tenantName) {
+    state.authError = 'Escribe el nombre de tu negocio o usa un código de invitación.';
+    showAuthGate();
+    return;
+  }
+  state.authBusy = true;
+  state.authError = '';
+  state.authNotice = '';
+  showLoadingGate('Creando tu cuenta…');
+  try {
+    const metadata = { full_name: fullName };
+    if (inviteCode) metadata.invite_code = inviteCode;
+    else metadata.tenant_name = tenantName;
+    const result = await signUp(backendConfig(), email, password, metadata);
+    state.authBusy = false;
+    if (result.needsConfirmation) {
+      state.authTab = 'login';
+      state.authNotice = 'Cuenta creada. Revisa tu correo, confirma el enlace y luego inicia sesión.';
+      showAuthGate();
+      return;
+    }
+    if (result.session) {
+      state.pendingInvite = '';
+      clearInviteFromUrl();
+      await finishAuthentication(result.session, 'signup');
+    }
+  } catch (error) {
+    state.authBusy = false;
+    state.authError = friendlyAuthError(error);
+    showAuthGate();
+  }
+}
+
+async function handleGateForgot() {
+  if (state.authBusy) return;
+  const email = String($('#gate-email')?.value ?? '').trim();
+  if (!email) {
+    state.authError = 'Escribe tu correo para enviarte el enlace de recuperación.';
+    showAuthGate();
+    return;
+  }
+  state.authBusy = true;
+  state.authError = '';
+  try {
+    await resetPassword(backendConfig(), email);
+    state.authTab = 'login';
+    state.authNotice = 'Te enviamos un correo con el enlace para restablecer tu contraseña.';
+  } catch (error) {
+    state.authError = friendlyAuthError(error);
+  } finally {
+    state.authBusy = false;
+    showAuthGate();
+  }
+}
+
+async function finishAuthentication(session, source) {
+  state.sync.session = session;
+  persistSyncState();
+  try {
+    const me = await fetchMe(backendConfig(), session);
+    state.sync.me = me;
+    state.sync.verifiedAt = new Date().toISOString();
+    state.sync.lastError = '';
+    persistSyncState();
+    activateTenant(me.tenant_id);
+    applyTheme(state.data.settings.theme);
+    state.authError = '';
+    state.authNotice = '';
+    const access = evaluateAccess(me, { offline: false, graceDays: APP_CONFIG.offlineGraceDays });
+    state.access = access;
+    refreshWorkerOptions();
+    renderFichas();
+    renderReports();
+    renderSettings();
+    if (!access.active) {
+      await pullTenantReadOnly();
+      showLicenseGate(access);
+      return;
+    }
+    hideAccessGate();
+    await syncNow(source);
+  } catch (error) {
+    if (isAuthFailure(error)) {
+      clearSession(friendlyAuthError(error));
+      return;
+    }
+    showConnectionGate(friendlyAuthError(error));
+  }
+}
+
+function showLoadingGate(message = 'Cargando…') {
+  const gate = $('#access-gate');
+  if (!gate) return;
+  gate.innerHTML = `
+    <div class="gate-card gate-card--loading">
+      <div class="gate-brand">
+        <img src="./icons/icon-192.png" alt="" width="52" height="52">
+        <div>
+          <p class="eyebrow">${escapeHTML(APP_CONFIG.appName)}</p>
+          <h1>${escapeHTML(message)}</h1>
+        </div>
+      </div>
+      <div class="gate-spinner" aria-hidden="true"></div>
+      <p class="muted">Esto toma solo un momento.</p>
+    </div>`;
+  openGate();
+}
+
+function openGate() {
+  const gate = $('#access-gate');
+  if (!gate) return;
+  gate.hidden = false;
+  document.body.classList.add('gate-open');
+  const shell = $('.app-shell');
+  const fab = $('#fab-nueva');
+  if (shell) shell.inert = true;
+  if (fab) fab.inert = true;
+  gate.scrollTop = 0;
+}
+
+function hideAccessGate() {
+  const gate = $('#access-gate');
+  if (!gate) return;
+  gate.hidden = true;
+  gate.replaceChildren();
+  document.body.classList.remove('gate-open');
+  const shell = $('.app-shell');
+  const fab = $('#fab-nueva');
+  if (shell) shell.inert = false;
+  if (fab) fab.inert = false;
+}
+
+function gateHeader(subtitle = 'Fichas de corte y costura') {
+  return `
+    <div class="gate-brand">
+      <img src="./icons/icon-192.png" alt="" width="52" height="52">
+      <div>
+        <p class="eyebrow">${escapeHTML(APP_CONFIG.appName)}</p>
+        <h1>${escapeHTML(subtitle)}</h1>
+      </div>
+    </div>`;
+}
+
+function showAuthGate(error = state.authError, notice = state.authNotice) {
+  const gate = $('#access-gate');
+  if (!gate) return;
+  state.authError = String(error || '');
+  state.authNotice = String(notice || '');
+  const tab = state.authTab === 'signup' ? 'signup' : 'login';
+  const errorHTML = state.authError ? `<div class="form-alert">${escapeHTML(state.authError)}</div>` : '';
+  const noticeHTML = state.authNotice ? `<div class="gate-notice">${escapeHTML(state.authNotice)}</div>` : '';
+  const loginForm = `
+    <form id="gate-login-form" class="gate-form" novalidate>
+      <label class="field">Correo
+        <input id="gate-email" type="email" inputmode="email" autocomplete="username" placeholder="tu@correo.com" value="${escapeHTML($('#gate-email')?.value ?? '')}">
+      </label>
+      <label class="field">Contraseña
+        <input id="gate-password" type="password" autocomplete="current-password" placeholder="Tu contraseña">
+      </label>
+      <button class="btn btn-primary gate-submit" type="submit" ${state.authBusy ? 'disabled' : ''}>Entrar</button>
+      <button class="link-btn" type="button" id="gate-forgot">Olvidé mi contraseña</button>
+    </form>`;
+  const signupForm = `
+    <form id="gate-signup-form" class="gate-form" novalidate>
+      <div class="form-grid two">
+        <label class="field">Tu nombre
+          <input id="gate-fullname" type="text" autocomplete="name" maxlength="120" placeholder="Nombre y apellido" value="${escapeHTML($('#gate-fullname')?.value ?? '')}">
+        </label>
+        <label class="field">Nombre del negocio
+          <input id="gate-tenant" type="text" autocomplete="organization" maxlength="120" placeholder="Ej. Confecciones Ana" value="${escapeHTML($('#gate-tenant')?.value ?? '')}">
+        </label>
+      </div>
+      <label class="field">Correo
+        <input id="gate-email" type="email" inputmode="email" autocomplete="username" placeholder="tu@correo.com" value="${escapeHTML($('#gate-email')?.value ?? '')}">
+      </label>
+      <label class="field">Contraseña
+        <input id="gate-password" type="password" autocomplete="new-password" placeholder="Mínimo 6 caracteres">
+      </label>
+      <label class="field">Código de invitación (opcional)
+        <input id="gate-invite" type="text" autocomplete="off" spellcheck="false" placeholder="Si te invitaron, pega el código" value="${escapeHTML(state.pendingInvite || $('#gate-invite')?.value || '')}">
+      </label>
+      <p class="field-hint">Si usas un código, te unirás al negocio que te invitó. Si no, se crea uno nuevo con ${APP_CONFIG.trialDays} días de prueba.</p>
+      <button class="btn btn-primary gate-submit" type="submit" ${state.authBusy ? 'disabled' : ''}>Crear cuenta</button>
+    </form>`;
+  gate.innerHTML = `
+    <div class="gate-card">
+      ${gateHeader(tab === 'signup' ? 'Empieza tu prueba gratis' : 'Bienvenido de nuevo')}
+      <div class="gate-tabs" role="tablist" aria-label="Acceso">
+        <button type="button" role="tab" data-auth-tab="login" class="${tab === 'login' ? 'is-active' : ''}" aria-selected="${tab === 'login'}">Iniciar sesión</button>
+        <button type="button" role="tab" data-auth-tab="signup" class="${tab === 'signup' ? 'is-active' : ''}" aria-selected="${tab === 'signup'}">Crear cuenta</button>
+      </div>
+      ${noticeHTML}
+      ${errorHTML}
+      ${tab === 'signup' ? signupForm : loginForm}
+      <p class="gate-note">Al continuar aceptas que tus fichas se guarden en la nube de tu negocio. También puedes exportar un respaldo cuando quieras.</p>
+    </div>`;
+  openGate();
+}
+
+function showLicenseGate(access) {
+  const gate = $('#access-gate');
+  if (!gate) return;
+  const me = state.sync.me;
+  if (!me) {
+    showAuthGate();
+    return;
+  }
+  const owner = me.role === 'owner' || Boolean(me.is_app_admin);
+  const until = access.until ? formatDateTime(access.until) : (me.trial_ends_at || me.current_period_end ? formatDateTime(me.trial_ends_at || me.current_period_end) : 'sin fecha');
+  const titles = {
+    trial_expired: 'Tu prueba terminó',
+    suspended: 'Suscripción suspendida',
+    past_due_expired: 'Pago pendiente',
+    canceled: 'Suscripción cancelada',
+    expired: 'Suscripción vencida',
+    offline_expired: 'Necesitas conexión',
+    inactive: 'Suscripción inactiva'
+  };
+  const title = titles[access.reason] || 'Activa tu suscripción';
+  const messages = {
+    trial_expired: 'Tu periodo de prueba terminó. Activa un plan para seguir creando y sincronizando fichas.',
+    suspended: 'La suscripción de este negocio está suspendida. Contacta al soporte o regulariza el pago.',
+    past_due_expired: 'No se pudo cobrar el último periodo. Actualiza el pago para recuperar el acceso.',
+    canceled: 'La suscripción fue cancelada. Puedes reactivarla cuando quieras.',
+    expired: 'El periodo pagado terminó. Renueva para volver a editar y sincronizar.',
+    offline_expired: 'No pudimos verificar tu suscripción sin conexión. Conéctate a internet e intenta de nuevo.',
+    inactive: 'Este negocio no tiene una suscripción activa.'
+  };
+  const message = messages[access.reason] || messages.inactive;
+  const monthly = Number(APP_CONFIG.prices?.monthly || 0);
+  const yearly = Number(APP_CONFIG.prices?.yearly || 0);
+  const monthlyLabel = monthly > 0 ? `$${monthly.toFixed(2)} / mes` : 'Plan mensual';
+  const yearlyLabel = yearly > 0 ? `$${yearly.toFixed(2)} / año` : 'Plan anual';
+  const ownerActions = owner ? `
+    <div class="gate-plans">
+      <div class="gate-plan">
+        <span class="gate-plan-name">Mensual</span>
+        <strong>${escapeHTML(monthlyLabel)}</strong>
+        <button class="btn btn-primary" type="button" data-gate-buy="monthly">Suscribirme</button>
+      </div>
+      <div class="gate-plan gate-plan--featured">
+        <span class="gate-plan-name">Anual</span>
+        <strong>${escapeHTML(yearlyLabel)}</strong>
+        <button class="btn btn-primary" type="button" data-gate-buy="yearly">Suscribirme</button>
+      </div>
+    </div>
+    <p class="gate-note">Los pagos se confirman manualmente o por la pasarela configurada. Si ya pagaste, usa “Ya pagué”.</p>` : `
+    <div class="gate-notice">El dueño del negocio debe renovar la suscripción. Tus datos y respaldos siguen a salvo.</div>`;
+  const contact = supportContact();
+  gate.innerHTML = `
+    <div class="gate-card">
+      ${gateHeader(title)}
+      <p class="gate-lead">${escapeHTML(message)}</p>
+      <div class="gate-facts">
+        <div><span>Negocio</span><strong>${escapeHTML(me.tenant_name || 'Mi negocio')}</strong></div>
+        <div><span>Cuenta</span><strong>${escapeHTML(me.email || '')}</strong></div>
+        <div><span>Rol</span><strong>${escapeHTML(roleLabel(me.role))}</strong></div>
+        <div><span>Estado</span><strong>${escapeHTML(licenseStatusLabel(me.status))}</strong></div>
+        <div><span>Plan</span><strong>${escapeHTML(planLabel(me.plan))}</strong></div>
+        <div><span>Vence</span><strong>${escapeHTML(until)}</strong></div>
+      </div>
+      ${ownerActions}
+      <div class="btn-row gate-actions">
+        <button class="btn btn-primary" type="button" id="gate-verify" ${state.accountBusy ? 'disabled' : ''}>Ya pagué, verificar</button>
+        <button class="btn" type="button" id="gate-export">Descargar respaldo</button>
+        <button class="btn" type="button" id="gate-logout">Cerrar sesión</button>
+        ${access.reason === 'offline_expired' ? '<button class="btn" type="button" id="gate-retry">Reintentar</button>' : ''}
+      </div>
+      ${contact ? `<p class="muted gate-support">¿Necesitas ayuda? <a href="${escapeHTML(contact)}" target="_blank" rel="noopener">Contactar al soporte</a></p>` : ''}
+    </div>`;
+  openGate();
+}
+
+function showConnectionGate(message = 'No se pudo conectar.') {
+  const gate = $('#access-gate');
+  if (!gate) return;
+  gate.innerHTML = `
+    <div class="gate-card">
+      ${gateHeader('Sin conexión')}
+      <p class="gate-lead">${escapeHTML(message)}</p>
+      <p class="muted">Tus datos locales siguen disponibles. Conéctate a internet para verificar la cuenta.</p>
+      <div class="btn-row gate-actions">
+        <button class="btn btn-primary" type="button" id="gate-retry">Reintentar</button>
+        <button class="btn" type="button" id="gate-export">Descargar respaldo</button>
+        <button class="btn" type="button" id="gate-logout">Cerrar sesión</button>
+      </div>
+    </div>`;
+  openGate();
+}
+
+function setAccess(access) {
+  state.access = access;
+  if (!BACKEND_READY || access.active) {
+    hideAccessGate();
+  } else if (state.sync.session && state.sync.me) {
+    showLicenseGate(access);
+  } else {
+    showAuthGate();
+  }
+  renderAccountPanel();
+}
+
+async function bootstrapBackend() {
+  if (!BACKEND_READY) {
+    state.access = { active: true, localMode: true, reason: 'local' };
+    hideAccessGate();
+    renderAccountPanel();
+    return;
+  }
+  if (!state.sync.session) {
+    showAuthGate();
+    return;
+  }
+  showLoadingGate('Verificando tu cuenta…');
+  try {
+    const session = await ensureFreshSession();
+    const me = await fetchMe(backendConfig(), session);
+    state.sync.me = me;
+    state.sync.verifiedAt = new Date().toISOString();
+    state.sync.lastError = '';
+    persistSyncState();
+    activateTenant(me.tenant_id);
+    applyTheme(state.data.settings.theme);
+    refreshWorkerOptions();
+    const access = evaluateAccess(me, {
+      offline: !navigator.onLine,
+      verifiedAt: state.sync.verifiedAt,
+      graceDays: APP_CONFIG.offlineGraceDays
+    });
+    state.access = access;
+    if (access.active) {
+      hideAccessGate();
+      renderFichas();
+      renderReports();
+      renderSettings();
+      if (navigator.onLine) await syncNow('startup');
+    } else {
+      await pullTenantReadOnly();
+      renderFichas();
+      renderReports();
+      renderSettings();
+      showLicenseGate(access);
+    }
+  } catch (error) {
+    if (isAuthFailure(error)) {
+      clearSession('La sesión expiró. Inicia sesión de nuevo.');
+      return;
+    }
+    const cachedMe = state.sync.me;
+    if (cachedMe?.tenant_id) {
+      activateTenant(cachedMe.tenant_id);
+      applyTheme(state.data.settings.theme);
+      refreshWorkerOptions();
+      const access = evaluateAccess(cachedMe, {
+        offline: true,
+        verifiedAt: state.sync.verifiedAt,
+        graceDays: APP_CONFIG.offlineGraceDays
+      });
+      state.access = access;
+      renderFichas();
+      renderReports();
+      renderSettings();
+      if (access.active) {
+        hideAccessGate();
+        toast('Sin conexión: usando la última licencia guardada.');
+      } else {
+        showLicenseGate(access);
+      }
+    } else {
+      showConnectionGate(friendlyAuthError(error));
+    }
+  }
+}
+
+function bindGateEvents() {
+  const gate = $('#access-gate');
+  if (!gate) return;
+  gate.addEventListener('click', (event) => {
+    const tab = event.target.closest('[data-auth-tab]');
+    if (tab) {
+      state.authTab = tab.dataset.authTab;
+      state.authError = '';
+      state.authNotice = '';
+      showAuthGate();
+      return;
+    }
+    const buy = event.target.closest('[data-gate-buy]');
+    if (buy) {
+      openCheckout(buy.dataset.gateBuy);
+      return;
+    }
+    if (event.target.closest('#gate-forgot')) {
+      handleGateForgot();
+      return;
+    }
+    if (event.target.closest('#gate-verify')) {
+      verifyAccount();
+      return;
+    }
+    if (event.target.closest('#gate-export')) {
+      exportBackup();
+      return;
+    }
+    if (event.target.closest('#gate-logout')) {
+      handleSignOut();
+      return;
+    }
+    if (event.target.closest('#gate-retry')) {
+      bootstrapBackend();
     }
   });
-  updateSyncPanel();
+  gate.addEventListener('submit', (event) => {
+    if (event.target.id === 'gate-login-form') {
+      event.preventDefault();
+      handleGateSignIn();
+      return;
+    }
+    if (event.target.id === 'gate-signup-form') {
+      event.preventDefault();
+      handleGateSignUp();
+    }
+  });
 }
 
 function applyTheme(mode, options = {}) {
@@ -1343,9 +1868,21 @@ function renderWorkersSettings() {
   }
 }
 
+function formatMoney(cents, currency = 'USD') {
+  const amount = Number(cents);
+  if (!Number.isFinite(amount)) return '—';
+  try {
+    return new Intl.NumberFormat('es-CR', { style: 'currency', currency: currency || 'USD' }).format(amount / 100);
+  } catch {
+    return `$${(amount / 100).toFixed(2)}`;
+  }
+}
+
 function renderSettings() {
   applyTheme(state.data.settings.theme);
   updateInstallUI();
+  const workersPanel = $('#workers-panel');
+  if (workersPanel) workersPanel.hidden = !canDo('manage_workers');
   renderWorkersSettings();
   const count = state.data.fichas.length;
   let bytes = 0;
@@ -1354,11 +1891,21 @@ function renderSettings() {
   } catch {
     bytes = 0;
   }
-  $('#storage-info').textContent = `${plural(count, 'ficha guardada', 'fichas guardadas')} · ${formatBytes(bytes)} en este teléfono.`;
-  updateSyncPanel();
+  const storageInfo = $('#storage-info');
+  if (storageInfo) storageInfo.textContent = `${plural(count, 'ficha guardada', 'fichas guardadas')} · ${formatBytes(bytes)} en este teléfono.`;
+  const backupPanel = $('#backup-panel');
+  if (backupPanel) backupPanel.hidden = !canDo('backup');
+  const clearButton = $('#clear-data');
+  if (clearButton) clearButton.hidden = !canDo('clear_data');
+  renderAccountPanel();
+  renderTeamPanel();
 }
 
 function addWorker() {
+  if (!canDo('manage_workers')) {
+    toast('Solo el dueño o un administrador puede editar trabajadores.');
+    return;
+  }
   const input = $('#worker-name');
   const name = input.value.trim();
   if (!name) {
@@ -1382,6 +1929,369 @@ function addWorker() {
   toast('Trabajador agregado.');
 }
 
+function renderAccountPanel() {
+  const summary = $('#account-summary');
+  const badge = $('#account-badge');
+  const actions = $('#account-actions');
+  const status = $('#account-status');
+  const payments = $('#account-payments');
+  if (!summary || !badge || !actions || !status || !payments) return;
+
+  if (!BACKEND_READY) {
+    badge.textContent = 'Modo local';
+    summary.innerHTML = `
+      <p class="panel-text">Esta copia todavía no está conectada a tu backend. La app funciona en modo local y los datos solo viven en este dispositivo.</p>
+      <p class="panel-text">Para vender suscripciones, configura <strong>config.js</strong> con la URL y la clave anon de tu proyecto Supabase y ejecuta <strong>supabase-setup.sql</strong>.</p>`;
+    actions.replaceChildren();
+    status.textContent = '';
+    payments.replaceChildren();
+    return;
+  }
+
+  if (!state.sync.session || !state.sync.me) {
+    badge.textContent = 'Sin sesión';
+    summary.innerHTML = '<p class="panel-text">Inicia sesión para sincronizar tus fichas y administrar tu suscripción.</p>';
+    actions.innerHTML = '<button class="btn btn-primary" type="button" data-account-action="auth">Iniciar sesión</button>';
+    status.textContent = '';
+    payments.replaceChildren();
+    return;
+  }
+
+  const me = state.sync.me;
+  const owner = canDo('billing');
+  const trialDate = me.trial_ends_at ? formatDateTime(me.trial_ends_at) : 'Sin fecha';
+  const periodDate = me.current_period_end ? formatDateTime(me.current_period_end) : 'Sin fecha';
+  const dateLabel = me.status === 'trialing' ? 'Prueba hasta' : 'Vence';
+  const dateValue = me.status === 'trialing' ? trialDate : periodDate;
+  const warning = accessWarning(state.access);
+  badge.textContent = me.is_app_admin ? 'Administrador del vendedor' : roleLabel(me.role);
+
+  summary.innerHTML = `
+    <div class="account-grid">
+      <div><span>Negocio</span><strong>${escapeHTML(me.tenant_name || 'Mi negocio')}</strong></div>
+      <div><span>Correo</span><strong>${escapeHTML(me.email || '')}</strong></div>
+      <div><span>Rol</span><strong>${escapeHTML(roleLabel(me.role))}</strong></div>
+      <div><span>Plan</span><strong>${escapeHTML(planLabel(me.plan))}</strong></div>
+      <div><span>Estado</span><strong>${escapeHTML(licenseStatusLabel(me.status))}</strong></div>
+      <div><span>${escapeHTML(dateLabel)}</span><strong>${escapeHTML(dateValue)}</strong></div>
+    </div>
+    ${warning ? `<p class="account-warning">${escapeHTML(warning)}</p>` : ''}`;
+
+  const buttons = [];
+  buttons.push(`<button class="btn" type="button" data-account-action="sync" ${state.syncBusy ? 'disabled' : ''}>${state.syncBusy ? 'Sincronizando…' : 'Sincronizar ahora'}</button>`);
+  buttons.push(`<button class="btn" type="button" data-account-action="verify" ${state.accountBusy ? 'disabled' : ''}>${state.accountBusy ? 'Verificando…' : 'Verificar suscripción'}</button>`);
+  if (owner) buttons.push('<button class="btn" type="button" data-account-action="manage">Gestionar plan</button>');
+  if (me.is_app_admin) buttons.push(`<a class="btn" href="${escapeHTML(APP_CONFIG.adminPath || './admin.html')}">Panel de administración</a>`);
+  buttons.push('<button class="btn" type="button" data-account-action="logout">Cerrar sesión</button>');
+  actions.innerHTML = buttons.join('');
+
+  const lastSync = state.sync.lastSyncedAt ? formatDateTime(state.sync.lastSyncedAt) : 'nunca';
+  const online = navigator.onLine ? '' : ' Sin conexión.';
+  status.textContent = state.sync.lastError
+    ? `Última sincronización: ${lastSync}. ${state.sync.lastError}`
+    : `Última sincronización: ${lastSync}.${online}`;
+
+  if (owner) {
+    loadPayments();
+    if (state.payments.rows.length > 0) {
+      payments.innerHTML = `
+        <h4 class="account-subtitle">Pagos recientes</h4>
+        <div class="payment-list">
+          ${state.payments.rows.map((row) => `
+            <div class="payment-row">
+              <div>
+                <strong>${escapeHTML(row.concept || 'Pago')}</strong>
+                <small>${escapeHTML(formatDateTime(row.created_at))} · ${escapeHTML(row.status || '')}</small>
+              </div>
+              <span>${escapeHTML(formatMoney(row.amount_cents, row.currency))}</span>
+            </div>`).join('')}
+        </div>`;
+    } else {
+      payments.innerHTML = '<p class="muted">Todavía no hay pagos registrados para este negocio.</p>';
+    }
+  } else {
+    payments.replaceChildren();
+  }
+}
+
+async function loadPayments(force = false) {
+  if (!canDo('billing') || !syncReady() || !navigator.onLine) return;
+  if (state.payments.loaded && !force) return;
+  state.payments.loaded = true;
+  try {
+    const session = await ensureFreshSession();
+    const rows = await subscriptionEvents(backendConfig(), session, state.sync.me.tenant_id);
+    state.payments.rows = Array.isArray(rows) ? rows : [];
+    renderAccountPanel();
+  } catch {
+    state.payments.rows = [];
+  }
+}
+
+function inviteLink(token) {
+  const base = `${location.origin}${location.pathname}`;
+  return `${base}?invite=${encodeURIComponent(token)}`;
+}
+
+function inviteMessage(role, token) {
+  return `Te invito a usar ${APP_CONFIG.appName} como ${roleLabel(role).toLowerCase()}. Crea tu cuenta con este enlace: ${inviteLink(token)}`;
+}
+
+function renderTeamPanel() {
+  const panel = $('#team-panel');
+  if (!panel) return;
+  const allowed = syncReady() && canDo('members');
+  panel.hidden = !allowed;
+  if (!allowed) return;
+
+  const me = state.sync.me;
+  const count = $('#team-count');
+  if (count) count.textContent = plural(state.team.members.length, 'miembro', 'miembros');
+
+  const nameField = $('#business-name-field');
+  const nameInput = $('#business-name');
+  if (nameField) nameField.hidden = !canDo('rename');
+  if (nameInput && document.activeElement !== nameInput) nameInput.value = me.tenant_name || '';
+
+  const inviteBox = $('#invite-box');
+  if (inviteBox) inviteBox.hidden = !canDo('invite');
+  const roleSelect = $('#invite-role');
+  if (roleSelect) {
+    const adminOption = roleSelect.querySelector('option[value="admin"]');
+    if (adminOption) {
+      adminOption.hidden = !canDo('manage_roles');
+      adminOption.disabled = !canDo('manage_roles');
+    }
+    if (!canDo('manage_roles')) roleSelect.value = 'employee';
+  }
+
+  const list = $('#team-list');
+  if (!list) return;
+  if (state.team.busy && !state.team.loaded) {
+    list.innerHTML = '<p class="muted">Cargando equipo…</p>';
+  } else if (state.team.error) {
+    list.innerHTML = `<p class="form-alert">${escapeHTML(state.team.error)}</p><button class="btn" type="button" data-team-retry>Reintentar</button>`;
+  } else if (state.team.members.length === 0) {
+    list.innerHTML = '<p class="muted">Aún no hay otros miembros en este negocio.</p>';
+  } else {
+    list.innerHTML = state.team.members.map((member) => {
+      const isOwner = member.role === 'owner';
+      const isSelf = member.user_id === me.user_id;
+      const editable = canDo('manage_roles') && !isOwner && !isSelf;
+      const roleControl = editable
+        ? `<select data-member-role="${escapeHTML(member.user_id)}" aria-label="Rol de ${escapeHTML(member.email)}">
+             <option value="admin" ${member.role === 'admin' ? 'selected' : ''}>Administrador</option>
+             <option value="employee" ${member.role === 'employee' ? 'selected' : ''}>Empleado</option>
+           </select>`
+        : `<span class="role-pill">${escapeHTML(roleLabel(member.role))}</span>`;
+      const remove = editable
+        ? `<button class="icon-btn" type="button" data-remove-member="${escapeHTML(member.user_id)}" aria-label="Quitar a ${escapeHTML(member.email)}">${'<svg class="icon" aria-hidden="true"><use href="#i-trash"></use></svg>'}</button>`
+        : '';
+      return `
+        <div class="member-row">
+          <div class="member-main">
+            <strong>${escapeHTML(member.full_name || member.email || 'Sin nombre')}</strong>
+            <small>${escapeHTML(member.email || '')}${isSelf ? ' · Tú' : ''}</small>
+          </div>
+          ${roleControl}
+          ${remove}
+        </div>`;
+    }).join('');
+  }
+
+  const result = $('#invite-result');
+  if (result) {
+    if (state.team.inviteResult) {
+      const created = state.team.inviteResult;
+      result.innerHTML = `
+        <div class="invite-created">
+          <h4>Invitación creada</h4>
+          <p class="muted">Comparte este enlace con ${escapeHTML(created.email || 'la persona')}.</p>
+          <code>${escapeHTML(created.link || inviteLink(created.token))}</code>
+          <div class="btn-row">
+            <button class="btn" type="button" data-copy-invite="${escapeHTML(created.token)}">Copiar enlace</button>
+            <button class="btn" type="button" data-whatsapp-invite="${escapeHTML(created.token)}" data-invite-role="${escapeHTML(created.role || 'employee')}">Enviar por WhatsApp</button>
+          </div>
+        </div>`;
+    } else {
+      result.replaceChildren();
+    }
+  }
+
+  const invitations = $('#invite-list');
+  if (!invitations) return;
+  const active = (state.team.invitations || []).filter((invite) => !invite.accepted_at && Date.parse(invite.expires_at) > Date.now());
+  if (!canDo('invite')) {
+    invitations.replaceChildren();
+    return;
+  }
+  if (active.length === 0) {
+    invitations.innerHTML = '<p class="muted">No hay invitaciones activas.</p>';
+    return;
+  }
+  invitations.innerHTML = `
+    <h4 class="account-subtitle">Invitaciones activas</h4>
+    <div class="invite-list-rows">
+      ${active.map((invite) => `
+        <div class="invite-row">
+          <div class="member-main">
+            <strong>${escapeHTML(invite.email || 'Enlace abierto')}</strong>
+            <small>${escapeHTML(roleLabel(invite.role))} · vence ${escapeHTML(formatDateTime(invite.expires_at))}</small>
+          </div>
+          <div class="invite-row-actions">
+            <button class="btn btn-small" type="button" data-copy-invite="${escapeHTML(invite.token)}">Copiar</button>
+            <button class="btn btn-small" type="button" data-whatsapp-invite="${escapeHTML(invite.token)}" data-invite-role="${escapeHTML(invite.role)}">WhatsApp</button>
+            <button class="btn btn-small btn-danger" type="button" data-revoke-invite="${escapeHTML(invite.id)}">Revocar</button>
+          </div>
+        </div>`).join('')}
+    </div>`;
+
+  if (!state.team.loaded && !state.team.busy && !state.team.error) loadTeam();
+}
+
+async function loadTeam(force = false) {
+  if (!syncReady() || !canDo('members') || state.team.busy) return;
+  if (state.team.loaded && !force) return;
+  state.team.busy = true;
+  state.team.error = '';
+  renderTeamPanel();
+  try {
+    const session = await ensureFreshSession();
+    const config = backendConfig();
+    const [members, invitations] = await Promise.all([
+      tenantMembers(config, session),
+      canDo('invite') ? tenantInvitations(config, session) : Promise.resolve([])
+    ]);
+    state.team.members = Array.isArray(members) ? members : [];
+    state.team.invitations = Array.isArray(invitations) ? invitations : [];
+    state.team.loaded = true;
+  } catch (error) {
+    state.team.error = friendlySyncError(error);
+    state.team.loaded = true;
+    if (isAuthFailure(error)) {
+      clearSession('La sesión expiró. Inicia sesión de nuevo.');
+      return;
+    }
+  } finally {
+    state.team.busy = false;
+    renderTeamPanel();
+  }
+}
+
+async function handleCreateInvitation() {
+  if (!canDo('invite') || state.team.busy) return;
+  const email = String($('#invite-email')?.value ?? '').trim();
+  const role = canDo('manage_roles') ? String($('#invite-role')?.value ?? 'employee') : 'employee';
+  state.team.busy = true;
+  state.team.error = '';
+  renderTeamPanel();
+  try {
+    const session = await ensureFreshSession();
+    const result = await createInvitation(backendConfig(), session, role, email);
+    if (result?.token) {
+      state.team.inviteResult = { ...result, email, link: inviteLink(result.token) };
+    }
+    state.team.loaded = false;
+    const emailInput = $('#invite-email');
+    if (emailInput) emailInput.value = '';
+    state.team.busy = false;
+    await loadTeam(true);
+    toast('Invitación creada.');
+  } catch (error) {
+    toast(friendlySyncError(error));
+  } finally {
+    state.team.busy = false;
+    renderTeamPanel();
+  }
+}
+
+async function handleRenameTenant() {
+  if (!canDo('rename')) return;
+  const name = String($('#business-name')?.value ?? '').trim();
+  if (!name) {
+    toast('Escribe el nombre del negocio.');
+    return;
+  }
+  try {
+    const session = await ensureFreshSession();
+    const me = await renameTenant(backendConfig(), session, name);
+    if (me) {
+      state.sync.me = me;
+      persistSyncState();
+      renderAccountPanel();
+      renderTeamPanel();
+      toast('Nombre del negocio actualizado.');
+    }
+  } catch (error) {
+    toast(friendlySyncError(error));
+  }
+}
+
+async function handleMemberRoleChange(select) {
+  const userId = select.dataset.memberRole;
+  const role = select.value;
+  if (!userId || !role) return;
+  select.disabled = true;
+  try {
+    const session = await ensureFreshSession();
+    await setMemberRole(backendConfig(), session, userId, role);
+    state.team.loaded = false;
+    await loadTeam(true);
+    toast('Rol actualizado.');
+  } catch (error) {
+    toast(friendlySyncError(error));
+    renderTeamPanel();
+  }
+}
+
+async function handleRemoveMember(button) {
+  const userId = button.dataset.removeMember;
+  if (!userId) return;
+  if (!window.confirm('¿Quitar a esta persona del equipo? Perderá acceso a las fichas del negocio.')) return;
+  try {
+    const session = await ensureFreshSession();
+    await removeMember(backendConfig(), session, userId);
+    state.team.loaded = false;
+    await loadTeam(true);
+    toast('Miembro quitado del equipo.');
+  } catch (error) {
+    toast(friendlySyncError(error));
+  }
+}
+
+async function handleRevokeInvitation(button) {
+  const invitationId = button.dataset.revokeInvite;
+  if (!invitationId) return;
+  if (!window.confirm('¿Revocar esta invitación? El enlace dejará de funcionar.')) return;
+  try {
+    const session = await ensureFreshSession();
+    await revokeInvitation(backendConfig(), session, invitationId);
+    state.team.loaded = false;
+    await loadTeam(true);
+    toast('Invitación revocada.');
+  } catch (error) {
+    toast(friendlySyncError(error));
+  }
+}
+
+async function copyInvite(button) {
+  const token = button.dataset.copyInvite;
+  if (!token) return;
+  try {
+    await copyText(inviteLink(token));
+    toast('Enlace de invitación copiado.');
+  } catch {
+    toast('No se pudo copiar el enlace.');
+  }
+}
+
+function shareInviteWhatsApp(button) {
+  const token = button.dataset.whatsappInvite;
+  if (!token) return;
+  const role = button.dataset.inviteRole || 'employee';
+  window.open(`https://wa.me/?text=${encodeURIComponent(inviteMessage(role, token))}`, '_blank', 'noopener');
+}
+
 function bindSettingsEvents() {
   $('#theme-control').addEventListener('click', (event) => {
     const button = event.target.closest('[data-theme]');
@@ -1400,6 +2310,10 @@ function bindSettingsEvents() {
   $('#settings-workers').addEventListener('click', (event) => {
     const button = event.target.closest('[data-remove-worker]');
     if (!button) return;
+    if (!canDo('manage_workers')) {
+      toast('Solo el dueño o un administrador puede editar trabajadores.');
+      return;
+    }
     const worker = button.dataset.removeWorker;
     state.data.settings.trabajadores = state.data.settings.trabajadores.filter((name) => name !== worker);
     if (!persistData()) return;
@@ -1408,21 +2322,25 @@ function bindSettingsEvents() {
     toast('Trabajador quitado de las sugerencias.');
   });
   $('#backup-export').addEventListener('click', () => {
-    const backup = {
-      version: DATA_VERSION,
-      app: 'control-fichas-corte',
-      exportedAt: new Date().toISOString(),
-      trabajadores: state.data.settings.trabajadores,
-      fichas: state.data.fichas,
-      deleted: state.data.deleted ?? {}
-    };
-    downloadText(JSON.stringify(backup, null, 2), `respaldo-cortes-${todayISO()}.json`, 'application/json;charset=utf-8');
-    toast('Respaldo descargado.');
+    if (!canDo('backup')) {
+      toast('No tienes permiso para descargar respaldos.');
+      return;
+    }
+    exportBackup();
   });
-  $('#backup-import').addEventListener('click', () => $('#backup-file').click());
+  $('#backup-import').addEventListener('click', () => {
+    if (!canDo('backup')) {
+      toast('No tienes permiso para restaurar respaldos.');
+      return;
+    }
+    $('#backup-file').click();
+  });
   $('#backup-file').addEventListener('change', importBackup);
-  bindSyncEvents();
   $('#clear-data').addEventListener('click', () => {
+    if (!canDo('clear_data')) {
+      toast('Solo el dueño del negocio puede borrar todas las fichas.');
+      return;
+    }
     const count = state.data.fichas.length;
     if (count === 0) {
       toast('No hay fichas para borrar.');
@@ -1441,6 +2359,63 @@ function bindSettingsEvents() {
     renderSettings();
     toast('Se borraron todas las fichas.');
     navigate('#/fichas', { replace: true });
+  });
+
+  $('#account-panel').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-account-action]');
+    if (!button) return;
+    const action = button.dataset.accountAction;
+    if (action === 'auth') showAuthGate();
+    else if (action === 'sync') syncNow('manual');
+    else if (action === 'verify') verifyAccount();
+    else if (action === 'logout') handleSignOut();
+    else if (action === 'manage') {
+      if (APP_CONFIG.manageSubscriptionUrl) {
+        window.open(APP_CONFIG.manageSubscriptionUrl, '_blank', 'noopener');
+      } else {
+        openCheckout(state.sync.me?.plan === 'yearly' ? 'yearly' : 'monthly');
+      }
+    }
+  });
+
+  $('#team-panel').addEventListener('click', (event) => {
+    if (event.target.closest('#business-rename')) {
+      handleRenameTenant();
+      return;
+    }
+    if (event.target.closest('#invite-create')) {
+      handleCreateInvitation();
+      return;
+    }
+    const retry = event.target.closest('[data-team-retry]');
+    if (retry) {
+      state.team.loaded = false;
+      state.team.error = '';
+      loadTeam(true);
+      return;
+    }
+    const copy = event.target.closest('[data-copy-invite]');
+    if (copy) {
+      copyInvite(copy);
+      return;
+    }
+    const whatsapp = event.target.closest('[data-whatsapp-invite]');
+    if (whatsapp) {
+      shareInviteWhatsApp(whatsapp);
+      return;
+    }
+    const revoke = event.target.closest('[data-revoke-invite]');
+    if (revoke) {
+      handleRevokeInvitation(revoke);
+      return;
+    }
+    const remove = event.target.closest('[data-remove-member]');
+    if (remove) handleRemoveMember(remove);
+  });
+
+  $('#team-panel').addEventListener('change', (event) => {
+    const select = event.target.closest('[data-member-role]');
+    if (select) handleMemberRoleChange(select);
   });
 }
 
@@ -2418,6 +3393,7 @@ function init() {
   bindFichasEvents();
   bindReportEvents();
   bindSettingsEvents();
+  bindGateEvents();
   setupInstallEvents();
   darkMedia.addEventListener('change', () => {
     if (state.data.settings.theme === 'auto') applyTheme('auto');
@@ -2437,7 +3413,7 @@ function init() {
   if (!location.hash) history.replaceState(null, '', '#/fichas');
   renderRoute();
   registerServiceWorker();
-  if (state.sync.session) window.setTimeout(() => syncNow('auto'), 1200);
+  bootstrapBackend();
 }
 
 init();

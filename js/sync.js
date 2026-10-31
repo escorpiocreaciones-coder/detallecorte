@@ -262,10 +262,12 @@ async function request(config, path, options = {}) {
   return payload;
 }
 
-export async function signUp(config, email, password) {
+export async function signUp(config, email, password, metadata = null) {
+  const body = { email, password };
+  if (metadata && typeof metadata === 'object') body.data = metadata;
   const payload = await request(config, '/auth/v1/signup', {
     method: 'POST',
-    body: { email, password }
+    body
   });
   const data = payload?.session ?? payload;
   return {
@@ -326,4 +328,225 @@ export async function signOutRemote(config, session) {
   try {
     await request(config, '/auth/v1/logout', { method: 'POST', token: session.accessToken });
   } catch {}
+}
+
+export async function resetPassword(config, email) {
+  return request(config, '/auth/v1/recover', {
+    method: 'POST',
+    body: { email }
+  });
+}
+
+// ------------------------------------------------------------
+// Sesión y licencia (modelo central por negocio)
+// ------------------------------------------------------------
+
+export const AUTH_STORAGE_KEY = 'control-cortes.auth.v2';
+
+function normalizeSession(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  if (typeof raw.accessToken !== 'string' || typeof raw.refreshToken !== 'string') return null;
+  if (typeof raw.userId !== 'string' || !raw.userId) return null;
+  return {
+    accessToken: raw.accessToken,
+    refreshToken: raw.refreshToken,
+    expiresAt: Number(raw.expiresAt) || 0,
+    userId: raw.userId,
+    email: typeof raw.email === 'string' ? raw.email : ''
+  };
+}
+
+export function loadAuthState() {
+  const fallback = { session: null, me: null, verifiedAt: '', lastSyncedAt: '' };
+  if (typeof localStorage === 'undefined') return fallback;
+  try {
+    const raw = JSON.parse(localStorage.getItem(AUTH_STORAGE_KEY) || 'null');
+    if (!raw || typeof raw !== 'object') return fallback;
+    const session = normalizeSession(raw.session);
+    const me = session && raw.me && typeof raw.me === 'object' ? raw.me : null;
+    return {
+      session,
+      me,
+      verifiedAt: typeof raw.verifiedAt === 'string' ? raw.verifiedAt : '',
+      lastSyncedAt: typeof raw.lastSyncedAt === 'string' ? raw.lastSyncedAt : ''
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+export function saveAuthState(state) {
+  if (typeof localStorage === 'undefined') return false;
+  try {
+    const session = normalizeSession(state?.session);
+    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify({
+      session,
+      me: session && state?.me && typeof state.me === 'object' ? state.me : null,
+      verifiedAt: session ? String(state?.verifiedAt ?? '') : '',
+      lastSyncedAt: session ? String(state?.lastSyncedAt ?? '') : ''
+    }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function rpc(config, session, functionName, args = {}) {
+  return request(config, `/rest/v1/rpc/${encodeURIComponent(functionName)}`, {
+    method: 'POST',
+    token: session?.accessToken,
+    body: args
+  });
+}
+
+export async function fetchMe(config, session) {
+  const me = await rpc(config, session, 'app_me');
+  if (!me || typeof me !== 'object' || !me.user_id) {
+    throw new Error('No se pudo cargar la cuenta.');
+  }
+  return me;
+}
+
+export async function pullTenantData(config, session, tenantId) {
+  if (!tenantId) return null;
+  const rows = await request(
+    config,
+    `/rest/v1/tenant_data?select=data,updated_at&tenant_id=eq.${encodeURIComponent(tenantId)}`,
+    { token: session.accessToken }
+  );
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  return rows[0]?.data ?? null;
+}
+
+export async function pushTenantData(config, session, tenantId, data) {
+  if (!tenantId) throw new Error('Falta el negocio.');
+  await request(config, '/rest/v1/tenant_data?on_conflict=tenant_id', {
+    method: 'POST',
+    token: session.accessToken,
+    headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: [{
+      tenant_id: tenantId,
+      data,
+      updated_by: session.userId,
+      updated_at: new Date().toISOString()
+    }]
+  });
+}
+
+export async function subscriptionEvents(config, session, tenantId) {
+  if (!tenantId) return [];
+  return request(
+    config,
+    `/rest/v1/subscription_events?select=id,status,amount_cents,currency,concept,period_start,period_end,created_at&tenant_id=eq.${encodeURIComponent(tenantId)}&order=created_at.desc&limit=24`,
+    { token: session.accessToken }
+  );
+}
+
+// ------------------------------------------------------------
+// Equipo y roles dentro de la app
+// ------------------------------------------------------------
+
+export async function tenantMembers(config, session) {
+  return rpc(config, session, 'tenant_members_list');
+}
+
+export async function tenantInvitations(config, session) {
+  return rpc(config, session, 'tenant_invitations');
+}
+
+export async function createInvitation(config, session, role = 'employee', email = '') {
+  return rpc(config, session, 'create_invitation', { p_role: role, p_email: email });
+}
+
+export async function revokeInvitation(config, session, invitationId) {
+  return rpc(config, session, 'revoke_invitation', { p_id: invitationId });
+}
+
+export async function acceptInvitation(config, session, code) {
+  return rpc(config, session, 'accept_invitation', { p_code: code });
+}
+
+export async function setMemberRole(config, session, userId, role) {
+  return rpc(config, session, 'set_member_role', { p_user_id: userId, p_role: role });
+}
+
+export async function removeMember(config, session, userId) {
+  return rpc(config, session, 'remove_member', { p_user_id: userId });
+}
+
+export async function renameTenant(config, session, name) {
+  return rpc(config, session, 'rename_tenant', { p_name: name });
+}
+
+// ------------------------------------------------------------
+// Panel del vendedor (solo is_app_admin)
+// ------------------------------------------------------------
+
+export async function adminMetrics(config, session) {
+  return rpc(config, session, 'admin_metrics');
+}
+
+export async function adminListTenants(config, session, search = '') {
+  return rpc(config, session, 'admin_list_tenants', { p_search: search });
+}
+
+export async function adminTenantDetail(config, session, tenantId) {
+  return rpc(config, session, 'admin_tenant_detail', { p_tenant_id: tenantId });
+}
+
+export async function adminExtendLicense(config, session, tenantId, days, plan = null, status = 'active') {
+  return rpc(config, session, 'admin_extend_license', {
+    p_tenant_id: tenantId,
+    p_days: days,
+    p_plan: plan,
+    p_status: status
+  });
+}
+
+export async function adminRecordPayment(config, session, tenantId, payload) {
+  return rpc(config, session, 'admin_record_payment', {
+    p_tenant_id: tenantId,
+    p_amount_cents: payload.amountCents,
+    p_currency: payload.currency ?? 'USD',
+    p_concept: payload.concept ?? 'Suscripción',
+    p_days: payload.days ?? 30,
+    p_plan: payload.plan ?? null
+  });
+}
+
+export async function adminSetStatus(config, session, tenantId, status, notes = null) {
+  return rpc(config, session, 'admin_set_status', {
+    p_tenant_id: tenantId,
+    p_status: status,
+    p_notes: notes
+  });
+}
+
+export async function adminSetTrial(config, session, tenantId, days) {
+  return rpc(config, session, 'admin_set_trial', { p_tenant_id: tenantId, p_days: days });
+}
+
+export async function adminSetComped(config, session, tenantId, comped) {
+  return rpc(config, session, 'admin_set_comped', { p_tenant_id: tenantId, p_comped: Boolean(comped) });
+}
+
+export async function adminUpdateTenant(config, session, tenantId, payload) {
+  return rpc(config, session, 'admin_update_tenant', {
+    p_tenant_id: tenantId,
+    p_name: payload.name ?? null,
+    p_amount_cents: payload.amountCents ?? null,
+    p_notes: payload.notes ?? null
+  });
+}
+
+export async function adminListAdmins(config, session) {
+  return rpc(config, session, 'admin_list_admins');
+}
+
+export async function adminAddAdmin(config, session, email) {
+  return rpc(config, session, 'admin_add_admin', { p_email: email });
+}
+
+export async function adminRemoveAdmin(config, session, userId) {
+  return rpc(config, session, 'admin_remove_admin', { p_user_id: userId });
 }

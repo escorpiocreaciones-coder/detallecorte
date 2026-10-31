@@ -1,9 +1,9 @@
 {
   "name": "control-fichas-corte",
-  "version": "2.2.0",
+  "version": "3.0.0",
   "private": true,
   "type": "module",
-  "description": "PWA de Administración de Corte Sergio para fichas de corte y costura con sincronización opcional",
+  "description": "PWA de Administración de Corte Sergio para fichas de corte y costura con suscripciones, equipos y sincronización en la nube",
   "scripts": {
     "test": "node --test",
     "start": "python -m http.server 8765"
