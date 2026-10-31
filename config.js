@@ -1,6 +1,6 @@
 export const APP_CONFIG = {
-  supabaseUrl: '',
-  supabaseAnonKey: '',
+  supabaseUrl: 'https://gxddocnoiwieehkbswbi.supabase.co',
+  supabaseAnonKey: 'sb_publishable_Fxe06JqpVX1-FWRpkANOPQ_vSOrdbeA',
   appName: 'Administración de Corte Sergio',
   appVersion: '3.0.0',
   trialDays: 14,
@@ -23,9 +23,17 @@ export const BACKEND_READY = Boolean(
   && String(APP_CONFIG.supabaseAnonKey || '').trim()
 );
 
+function normalizeSupabaseUrl(value) {
+  return String(value || '')
+    .trim()
+    .replace(/\/+$/, '')
+    .replace(/\/rest\/v1$/i, '')
+    .replace(/\/+$/, '');
+}
+
 export function backendConfig() {
   return {
-    url: String(APP_CONFIG.supabaseUrl || '').trim().replace(/\/+$/, ''),
+    url: normalizeSupabaseUrl(APP_CONFIG.supabaseUrl),
     anonKey: String(APP_CONFIG.supabaseAnonKey || '').trim()
   };
 }
