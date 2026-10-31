@@ -212,9 +212,15 @@
 }
 
 .status-active,
-.status-comped {
+.status-comped,
+.status-available {
   background: var(--primary-soft);
   color: var(--primary-dark);
+}
+
+.status-revoked {
+  background: var(--surface-2);
+  color: var(--muted);
 }
 
 .status-trialing {
@@ -270,6 +276,73 @@
   background: var(--surface);
   color: var(--text);
   font: inherit;
+}
+
+.admin-code-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.2fr) minmax(180px, 1fr) 100px minmax(160px, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  margin-bottom: 8px;
+}
+
+.admin-code-form label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.admin-code-form input,
+.admin-code-form select {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.admin-code-result[hidden] {
+  display: none;
+}
+
+.admin-code-result {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.admin-code-result strong {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 1.35rem;
+  letter-spacing: 0.12em;
+}
+
+.admin-code-table {
+  min-width: 760px;
+}
+
+.code-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.code-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .tenant-dialog {
@@ -476,6 +549,10 @@
 
   .admin-search {
     width: 100%;
+  }
+
+  .admin-code-form {
+    grid-template-columns: 1fr;
   }
 
   .admin-user {

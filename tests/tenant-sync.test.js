@@ -2,9 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   adminAddAdmin,
+  adminCreateAccessCode,
   adminExtendLicense,
+  adminListAccessCodes,
   adminListTenants,
   adminRecordPayment,
+  adminRevokeAccessCode,
   adminSetComped,
   adminSetStatus,
   adminUpdateTenant,
@@ -12,6 +15,7 @@ import {
   fetchMe,
   pullTenantData,
   pushTenantData,
+  redeemAccessCode,
   setMemberRole,
   subscriptionEvents,
   tenantMembers
@@ -182,6 +186,39 @@ test('los RPC de administración envían los nombres de parámetros que espera S
 
     await adminAddAdmin(config, session, 'jefe@ejemplo.com');
     assert.deepEqual(JSON.parse(mock.calls[6].options.body), { p_email: 'jefe@ejemplo.com' });
+  } finally {
+    mock.restore();
+  }
+});
+
+test('los RPC de códigos de acceso usan los argumentos esperados', async () => {
+  const mock = mockFetch(() => jsonResponse({}));
+  try {
+    const created = await adminCreateAccessCode(config, session, {
+      label: 'Cliente Nuevo',
+      days: 30,
+      tenantId: 'tenant-1',
+      notes: 'primer equipo'
+    });
+    assert.deepEqual(created, {});
+    assert.match(mock.calls[0].url, /\/rpc\/admin_create_access_code$/);
+    assert.deepEqual(JSON.parse(mock.calls[0].options.body), {
+      p_label: 'Cliente Nuevo',
+      p_days: 30,
+      p_tenant_id: 'tenant-1',
+      p_notes: 'primer equipo'
+    });
+
+    await adminListAccessCodes(config, session);
+    assert.match(mock.calls[1].url, /\/rpc\/admin_list_access_codes$/);
+
+    await redeemAccessCode(config, session, 'ABCD1234');
+    assert.match(mock.calls[2].url, /\/rpc\/redeem_access_code$/);
+    assert.deepEqual(JSON.parse(mock.calls[2].options.body), { p_code: 'ABCD1234' });
+
+    await adminRevokeAccessCode(config, session, 'code-1');
+    assert.match(mock.calls[3].url, /\/rpc\/admin_revoke_access_code$/);
+    assert.deepEqual(JSON.parse(mock.calls[3].options.body), { p_id: 'code-1' });
   } finally {
     mock.restore();
   }

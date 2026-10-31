@@ -43,11 +43,13 @@ import {
   pruneDeleted,
   pullTenantData,
   pushTenantData,
+  redeemAccessCode,
   refreshSession,
   renameTenant,
   resetPassword,
   saveAuthState,
   signIn,
+  signInAnonymously,
   signOutRemote,
   signUp,
   subscriptionEvents,
@@ -100,7 +102,8 @@ const state = {
   syncPushTimer: null,
   syncPollTimer: null,
   authBusy: false,
-  authTab: 'login',
+  authTab: 'code',
+  authCode: '',
   authError: '',
   authNotice: '',
   pendingInvite: readInviteFromUrl(),
@@ -110,7 +113,7 @@ const state = {
   accountBusy: false
 };
 
-state.authTab = state.pendingInvite ? 'signup' : 'login';
+state.authTab = state.pendingInvite ? 'signup' : 'code';
 
 if (authState.session && authState.me?.tenant_id) {
   activeDataKey = tenantDataKey(authState.me.tenant_id);
@@ -269,6 +272,13 @@ function friendlyAuthError(error) {
   if (/user already registered|already been registered/i.test(message)) return 'Ese correo ya tiene cuenta. Inicia sesión.';
   if (/password should be at least/i.test(message)) return 'La contraseña debe tener al menos 6 caracteres.';
   if (/signups not allowed|signup is disabled/i.test(message)) return 'El registro está desactivado. Contacta al soporte.';
+  if (/anonymous.*disabled|anonymous_provider_disabled|anonymous sign-?ins? (are|is) disabled/i.test(message)) {
+    return 'El acceso por código aún no está habilitado. Contacta al administrador.';
+  }
+  if (/c[oó]digo inv[aá]lido/i.test(message)) return 'El código no es válido. Revísalo o pide uno nuevo.';
+  if (/ya fue utilizado/i.test(message)) return 'Ese código ya fue utilizado. Pide uno nuevo al administrador.';
+  if (/revocado/i.test(message)) return 'Ese código fue revocado. Pide uno nuevo al administrador.';
+  if (/ya tiene un negocio/i.test(message)) return 'Esta cuenta ya está vinculada a un negocio.';
   if (/for security purposes|rate limit|too many/i.test(message)) return 'Demasiados intentos. Espera un momento.';
   if (/database error|trigger|invitaci/i.test(message)) {
     return 'No se pudo crear la cuenta. Revisa que supabase-setup.sql esté ejecutado o pide una invitación nueva.';
@@ -499,6 +509,48 @@ function exportBackup() {
   toast('Respaldo descargado.');
 }
 
+function normalizeAccessCode(value) {
+  return String(value ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+async function handleGateCode() {
+  if (state.authBusy) return;
+  const code = normalizeAccessCode($('#gate-code')?.value ?? state.authCode);
+  if (code.length < 4) {
+    state.authError = 'Escribe el código que te dio el administrador.';
+    showAuthGate();
+    return;
+  }
+  state.authCode = code;
+  state.authBusy = true;
+  state.authError = '';
+  state.authNotice = '';
+  showLoadingGate('Validando tu código…');
+  let session = state.sync.session;
+  let createdSession = false;
+  try {
+    if (!session) {
+      session = await signInAnonymously(backendConfig());
+      createdSession = true;
+    }
+    await redeemAccessCode(backendConfig(), session, code);
+    state.authCode = '';
+    state.authBusy = false;
+    await finishAuthentication(session, 'code');
+  } catch (error) {
+    if (createdSession) {
+      try {
+        await signOutRemote(backendConfig(), session);
+      } catch {
+        // La sesión anónima queda sin usar si el código no era válido.
+      }
+    }
+    state.authBusy = false;
+    state.authError = friendlyAuthError(error);
+    showAuthGate();
+  }
+}
+
 async function handleGateSignIn() {
   if (state.authBusy) return;
   const email = String($('#gate-email')?.value ?? '').trim();
@@ -688,9 +740,20 @@ function showAuthGate(error = state.authError, notice = state.authNotice) {
   if (!gate) return;
   state.authError = String(error || '');
   state.authNotice = String(notice || '');
-  const tab = state.authTab === 'signup' ? 'signup' : 'login';
+  const allowInvite = Boolean(state.pendingInvite);
+  const tab = state.authTab === 'login'
+    ? 'login'
+    : allowInvite && state.authTab === 'signup' ? 'signup' : allowInvite ? 'signup' : 'code';
   const errorHTML = state.authError ? `<div class="form-alert">${escapeHTML(state.authError)}</div>` : '';
   const noticeHTML = state.authNotice ? `<div class="gate-notice">${escapeHTML(state.authNotice)}</div>` : '';
+  const codeForm = `
+    <form id="gate-code-form" class="gate-form" novalidate>
+      <label class="field">Código de acceso
+        <input id="gate-code" type="text" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" maxlength="20" placeholder="Ej. A1B2C3D4" value="${escapeHTML(state.authCode || $('#gate-code')?.value || '')}">
+      </label>
+      <p class="field-hint">Pídele el código a tu proveedor. La cuenta se activa desde el primer ingreso y dura el tiempo asignado.</p>
+      <button class="btn btn-primary gate-submit" type="submit" ${state.authBusy ? 'disabled' : ''}>Entrar con código</button>
+    </form>`;
   const loginForm = `
     <form id="gate-login-form" class="gate-form" novalidate>
       <label class="field">Correo
@@ -704,36 +767,35 @@ function showAuthGate(error = state.authError, notice = state.authNotice) {
     </form>`;
   const signupForm = `
     <form id="gate-signup-form" class="gate-form" novalidate>
-      <div class="form-grid two">
-        <label class="field">Tu nombre
-          <input id="gate-fullname" type="text" autocomplete="name" maxlength="120" placeholder="Nombre y apellido" value="${escapeHTML($('#gate-fullname')?.value ?? '')}">
-        </label>
-        <label class="field">Nombre del negocio
-          <input id="gate-tenant" type="text" autocomplete="organization" maxlength="120" placeholder="Ej. Confecciones Ana" value="${escapeHTML($('#gate-tenant')?.value ?? '')}">
-        </label>
-      </div>
+      <label class="field">Tu nombre
+        <input id="gate-fullname" type="text" autocomplete="name" maxlength="120" placeholder="Nombre y apellido" value="${escapeHTML($('#gate-fullname')?.value ?? '')}">
+      </label>
       <label class="field">Correo
         <input id="gate-email" type="email" inputmode="email" autocomplete="username" placeholder="tu@correo.com" value="${escapeHTML($('#gate-email')?.value ?? '')}">
       </label>
       <label class="field">Contraseña
         <input id="gate-password" type="password" autocomplete="new-password" placeholder="Mínimo 6 caracteres">
       </label>
-      <label class="field">Código de invitación (opcional)
-        <input id="gate-invite" type="text" autocomplete="off" spellcheck="false" placeholder="Si te invitaron, pega el código" value="${escapeHTML(state.pendingInvite || $('#gate-invite')?.value || '')}">
-      </label>
-      <p class="field-hint">Si usas un código, te unirás al negocio que te invitó. Si no, se crea uno nuevo con ${APP_CONFIG.trialDays} días de prueba.</p>
-      <button class="btn btn-primary gate-submit" type="submit" ${state.authBusy ? 'disabled' : ''}>Crear cuenta</button>
+      <p class="field-hint">Invitación: ${escapeHTML(state.pendingInvite)}. Al crear la cuenta te unirás al negocio que te invitó.</p>
+      <button class="btn btn-primary gate-submit" type="submit" ${state.authBusy ? 'disabled' : ''}>Aceptar invitación</button>
     </form>`;
+  const tabs = allowInvite
+    ? `
+      <button type="button" role="tab" data-auth-tab="signup" class="${tab === 'signup' ? 'is-active' : ''}" aria-selected="${tab === 'signup'}">Crear cuenta</button>
+      <button type="button" role="tab" data-auth-tab="login" class="${tab === 'login' ? 'is-active' : ''}" aria-selected="${tab === 'login'}">Iniciar sesión</button>`
+    : `
+      <button type="button" role="tab" data-auth-tab="code" class="${tab === 'code' ? 'is-active' : ''}" aria-selected="${tab === 'code'}">Código de acceso</button>
+      <button type="button" role="tab" data-auth-tab="login" class="${tab === 'login' ? 'is-active' : ''}" aria-selected="${tab === 'login'}">Correo</button>`;
+  const heading = tab === 'signup' ? 'Acepta tu invitación' : tab === 'login' ? 'Bienvenido de nuevo' : 'Ingresa con tu código';
   gate.innerHTML = `
     <div class="gate-card">
-      ${gateHeader(tab === 'signup' ? 'Empieza tu prueba gratis' : 'Bienvenido de nuevo')}
+      ${gateHeader(heading)}
       <div class="gate-tabs" role="tablist" aria-label="Acceso">
-        <button type="button" role="tab" data-auth-tab="login" class="${tab === 'login' ? 'is-active' : ''}" aria-selected="${tab === 'login'}">Iniciar sesión</button>
-        <button type="button" role="tab" data-auth-tab="signup" class="${tab === 'signup' ? 'is-active' : ''}" aria-selected="${tab === 'signup'}">Crear cuenta</button>
+        ${tabs}
       </div>
       ${noticeHTML}
       ${errorHTML}
-      ${tab === 'signup' ? signupForm : loginForm}
+      ${tab === 'signup' ? signupForm : tab === 'login' ? loginForm : codeForm}
       <p class="gate-note">Al continuar aceptas que tus fichas se guarden en la nube de tu negocio. También puedes exportar un respaldo cuando quieras.</p>
     </div>`;
   openGate();
@@ -952,6 +1014,11 @@ function bindGateEvents() {
     }
   });
   gate.addEventListener('submit', (event) => {
+    if (event.target.id === 'gate-code-form') {
+      event.preventDefault();
+      handleGateCode();
+      return;
+    }
     if (event.target.id === 'gate-login-form') {
       event.preventDefault();
       handleGateSignIn();

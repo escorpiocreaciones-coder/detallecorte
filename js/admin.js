@@ -1,12 +1,15 @@
 import { APP_CONFIG, BACKEND_READY, backendConfig } from '../config.js';
 import {
   adminAddAdmin,
+  adminCreateAccessCode,
   adminExtendLicense,
+  adminListAccessCodes,
   adminListAdmins,
   adminListTenants,
   adminMetrics,
   adminRecordPayment,
   adminRemoveAdmin,
+  adminRevokeAccessCode,
   adminSetComped,
   adminSetStatus,
   adminSetTrial,
@@ -44,6 +47,9 @@ const state = {
   metrics: {},
   tenants: [],
   admins: [],
+  codes: [],
+  codesError: '',
+  codeResult: null,
   detail: null,
   search: '',
   loading: false,
@@ -174,6 +180,9 @@ function clearAuth(message = '') {
   state.me = null;
   state.detail = null;
   state.tenants = [];
+  state.codes = [];
+  state.codesError = '';
+  state.codeResult = null;
   saveAuthState({ session: null, me: null, verifiedAt: '', lastSyncedAt: '' });
   if (session) signOutRemote(backendConfig(), session);
   const dialog = $('#tenant-dialog');
@@ -259,9 +268,19 @@ async function loadAll(options = {}) {
     state.metrics = metrics && typeof metrics === 'object' ? metrics : {};
     state.tenants = Array.isArray(tenants) ? tenants : [];
     state.admins = Array.isArray(admins) ? admins : [];
+    try {
+      const codes = await adminListAccessCodes(config, session);
+      state.codes = Array.isArray(codes) ? codes : [];
+      state.codesError = '';
+    } catch (error) {
+      state.codes = [];
+      state.codesError = friendlyError(error);
+    }
     renderMetrics();
     renderTenants();
     renderAdmins();
+    renderCodeTenants();
+    renderCodes();
     if (options.notify) toast('Panel actualizado.');
   } catch (error) {
     handleError(error);
@@ -347,6 +366,202 @@ function renderAdmins() {
         ${isSelf ? '<span class="role-pill">Tú</span>' : `<button class="btn btn-small btn-danger" type="button" data-remove-admin="${escapeHTML(admin.user_id)}">Quitar</button>`}
       </div>`;
   }).join('');
+}
+
+function formatCode(code) {
+  return String(code || '').replace(/(.{4})/g, '$1 ').trim();
+}
+
+function codeStatus(code) {
+  if (code.revoked_at) return { key: 'revoked', label: 'Revocado' };
+  if (!code.used_at) return { key: 'available', label: 'Disponible' };
+  if (code.access_ends_at && Date.parse(code.access_ends_at) < Date.now()) {
+    return { key: 'expired', label: 'Vencido' };
+  }
+  return { key: 'active', label: 'Activo' };
+}
+
+function renderCodeTenants() {
+  const select = $('#admin-code-tenant');
+  if (!select) return;
+  const current = select.value;
+  select.innerHTML = '<option value="">Nuevo cliente</option>'
+    + state.tenants.map((tenant) => `<option value="${escapeHTML(tenant.tenant_id)}">${escapeHTML(tenant.name || 'Sin nombre')}</option>`).join('');
+  if (current && state.tenants.some((tenant) => tenant.tenant_id === current)) {
+    select.value = current;
+  }
+}
+
+function renderCodeResult() {
+  const container = $('#admin-code-result');
+  if (!container) return;
+  const result = state.codeResult;
+  if (!result?.code) {
+    container.hidden = true;
+    container.innerHTML = '';
+    return;
+  }
+  container.hidden = false;
+  container.innerHTML = `
+    <div>
+      <span class="muted">Código para ${escapeHTML(result.label || 'nuevo cliente')}</span>
+      <strong>${escapeHTML(formatCode(result.code))}</strong>
+      <small>${escapeHTML(String(result.days || 30))} días desde la activación.</small>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary btn-small" type="button" data-copy-code="${escapeHTML(result.code)}">Copiar</button>
+      <button class="btn btn-small" type="button" data-clear-code-result>Listo</button>
+    </div>`;
+}
+
+function renderCodes() {
+  const tbody = $('#admin-codes');
+  const count = $('#admin-code-count');
+  if (!tbody) return;
+  if (count) count.textContent = plural(state.codes.length, 'código', 'códigos');
+  if (state.codesError) {
+    tbody.innerHTML = `<tr><td colspan="6" class="muted">${escapeHTML(state.codesError)}</td></tr>`;
+    return;
+  }
+  if (state.codes.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" class="muted">Todavía no hay códigos. Genera el primero arriba.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = state.codes.map((code) => {
+    const status = codeStatus(code);
+    const tenantName = code.tenant_name || code.label || 'Nuevo cliente';
+    const usedBy = code.used_by_email || (code.used_at ? 'Dispositivo' : 'Sin usar');
+    const actions = [
+      `<button class="btn btn-small" type="button" data-copy-code="${escapeHTML(code.code)}">Copiar</button>`
+    ];
+    if (code.tenant_id) {
+      actions.push(`<button class="btn btn-small" type="button" data-open-code-tenant="${escapeHTML(code.tenant_id)}">Ver</button>`);
+    }
+    if (code.used_at && code.tenant_id && code.revoked_at === null) {
+      actions.push(`<button class="btn btn-small" type="button" data-extend-code="${escapeHTML(code.id)}">+30 días</button>`);
+    }
+    if (!code.revoked_at) {
+      actions.push(`<button class="btn btn-small btn-danger" type="button" data-revoke-code="${escapeHTML(code.id)}">Revocar</button>`);
+    }
+    return `
+      <tr>
+        <td><span class="code-value">${escapeHTML(formatCode(code.code))}</span><small>${escapeHTML(code.notes || code.label || '')}</small></td>
+        <td>${escapeHTML(tenantName)}<small>${escapeHTML(usedBy)}</small></td>
+        <td><span class="status-pill status-${status.key}">${escapeHTML(status.label)}</span></td>
+        <td>${code.used_at ? escapeHTML(dateTime(code.used_at)) : 'Sin usar'}</td>
+        <td>${code.access_ends_at ? escapeHTML(dayDate(code.access_ends_at)) : '—'}</td>
+        <td><div class="code-actions">${actions.join('')}</div></td>
+      </tr>`;
+  }).join('');
+}
+
+async function copyCode(code) {
+  try {
+    await navigator.clipboard.writeText(code);
+    toast('Código copiado.');
+  } catch {
+    window.prompt('Copia el código:', code);
+  }
+}
+
+async function handleCreateCode(event) {
+  event.preventDefault();
+  if (state.actionBusy) return;
+  const label = String($('#admin-code-label')?.value ?? '').trim();
+  const tenantId = String($('#admin-code-tenant')?.value ?? '') || null;
+  const notes = String($('#admin-code-notes')?.value ?? '').trim();
+  const days = Number($('#admin-code-days')?.value);
+  if (!tenantId && !label) {
+    toast('Escribe el nombre del cliente o elige un negocio.');
+    return;
+  }
+  if (!Number.isInteger(days) || days < 1 || days > 3650) {
+    toast('Los días deben estar entre 1 y 3650.');
+    return;
+  }
+  state.actionBusy = true;
+  try {
+    const session = await ensureSession();
+    const result = await adminCreateAccessCode(backendConfig(), session, {
+      label,
+      days,
+      tenantId,
+      notes
+    });
+    state.codeResult = result;
+    renderCodeResult();
+    const labelInput = $('#admin-code-label');
+    const notesInput = $('#admin-code-notes');
+    if (labelInput) labelInput.value = '';
+    if (notesInput) notesInput.value = '';
+    toast('Código generado.');
+    await loadAll();
+  } catch (error) {
+    handleError(error);
+  } finally {
+    state.actionBusy = false;
+  }
+}
+
+async function handleCodeClick(event) {
+  const copy = event.target.closest('[data-copy-code]');
+  if (copy) {
+    await copyCode(copy.dataset.copyCode);
+    return;
+  }
+  if (event.target.closest('[data-clear-code-result]')) {
+    state.codeResult = null;
+    renderCodeResult();
+    return;
+  }
+  const open = event.target.closest('[data-open-code-tenant]');
+  if (open) {
+    await openTenant(open.dataset.openCodeTenant);
+    return;
+  }
+  const extend = event.target.closest('[data-extend-code]');
+  if (extend) {
+    const code = state.codes.find((item) => item.id === extend.dataset.extendCode);
+    if (!code?.tenant_id) return;
+    if (!window.confirm('¿Agregar 30 días a este negocio?')) return;
+    if (state.actionBusy) return;
+    state.actionBusy = true;
+    try {
+      const session = await ensureSession();
+      await adminExtendLicense(backendConfig(), session, code.tenant_id, 30, null, 'active');
+      toast('30 días agregados.');
+      await loadAll();
+    } catch (error) {
+      handleError(error);
+    } finally {
+      state.actionBusy = false;
+    }
+    return;
+  }
+  const revoke = event.target.closest('[data-revoke-code]');
+  if (revoke) {
+    if (!window.confirm('¿Revocar este código? No podrá usarse para activar otro dispositivo.')) return;
+    if (state.actionBusy) return;
+    state.actionBusy = true;
+    try {
+      const session = await ensureSession();
+      await adminRevokeAccessCode(backendConfig(), session, revoke.dataset.revokeCode);
+      toast('Código revocado.');
+      await loadAll();
+    } catch (error) {
+      handleError(error);
+    } finally {
+      state.actionBusy = false;
+    }
+  }
+}
+
+function handleCodeTenantChange() {
+  const select = $('#admin-code-tenant');
+  const input = $('#admin-code-label');
+  if (!select?.value || !input || input.value.trim()) return;
+  const tenant = state.tenants.find((item) => item.tenant_id === select.value);
+  if (tenant?.name) input.value = tenant.name;
 }
 
 function options(values, selected, labeler = (value) => value) {
@@ -792,6 +1007,10 @@ function bindEvents() {
   });
 
   $('#admin-add-form')?.addEventListener('submit', handleAddAdmin);
+  $('#admin-code-form')?.addEventListener('submit', handleCreateCode);
+  $('#admin-code-tenant')?.addEventListener('change', handleCodeTenantChange);
+  $('#admin-codes')?.addEventListener('click', handleCodeClick);
+  $('#admin-code-result')?.addEventListener('click', handleCodeClick);
 
   const dialog = $('#tenant-dialog');
   dialog?.addEventListener('click', (event) => {

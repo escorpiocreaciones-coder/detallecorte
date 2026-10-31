@@ -9,7 +9,8 @@ import {
   pullData,
   pushData,
   sanitizeDeleted,
-  signIn
+  signIn,
+  signInAnonymously
 } from '../js/sync.js';
 
 function ficha(id, updatedAt, extra = {}) {
@@ -162,6 +163,32 @@ test('signIn, pullData y pushData usan los endpoints y cabeceras de Supabase', a
     await pushData(config, session, { fichas: [] });
     assert.equal(calls[2].options.headers.Prefer, 'resolution=merge-duplicates,return=minimal');
     assert.equal(JSON.parse(calls[2].options.body)[0].user_id, 'user-1');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('signInAnonymously crea una sesión de dispositivo desde /auth/v1/signup', async () => {
+  const calls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url: String(url), options });
+    return jsonResponse({
+      access_token: 'anon-access',
+      refresh_token: 'anon-refresh',
+      expires_in: 3600,
+      user: { id: 'anon-1', email: null }
+    });
+  };
+  try {
+    const config = { url: 'https://abc.supabase.co', anonKey: 'anon-key' };
+    const session = await signInAnonymously(config);
+    assert.equal(session.accessToken, 'anon-access');
+    assert.equal(session.userId, 'anon-1');
+    assert.equal(session.email, '');
+    assert.match(calls[0].url, /\/auth\/v1\/signup$/);
+    assert.equal(calls[0].options.method, 'POST');
+    assert.deepEqual(JSON.parse(calls[0].options.body), { data: {}, gotrue_meta_security: {} });
   } finally {
     globalThis.fetch = originalFetch;
   }

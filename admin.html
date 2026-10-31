@@ -8,10 +8,10 @@
   <meta name="theme-color" content="#0f766e">
   <meta name="color-scheme" content="light dark">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; form-action 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://*.supabase.co; manifest-src 'self'; worker-src 'self'">
-  <script src="./theme-init.js?v=3.0.0"></script>
+  <script src="./theme-init.js?v=3.1.0"></script>
   <link rel="icon" href="./icons/icon-192.png" sizes="192x192" type="image/png">
-  <link rel="stylesheet" href="./styles.css?v=3.0.0">
-  <link rel="stylesheet" href="./admin.css?v=3.0.0">
+  <link rel="stylesheet" href="./styles.css?v=3.1.0">
+  <link rel="stylesheet" href="./admin.css?v=3.1.0">
 </head>
 <body class="admin-body">
   <section class="admin-login" id="admin-login" hidden>
@@ -77,6 +77,51 @@
       <section class="panel admin-panel">
         <div class="admin-toolbar">
           <div>
+            <h2>Códigos de acceso</h2>
+            <p class="muted" id="admin-code-count">0 códigos</p>
+          </div>
+        </div>
+        <form id="admin-code-form" class="admin-code-form">
+          <label>Cliente / etiqueta
+            <input id="admin-code-label" type="text" maxlength="120" placeholder="Ej. Confecciones Ana">
+          </label>
+          <label>Negocio existente
+            <select id="admin-code-tenant">
+              <option value="">Nuevo cliente</option>
+            </select>
+          </label>
+          <label>Días
+            <input id="admin-code-days" type="number" min="1" max="3650" step="1" value="30" required>
+          </label>
+          <label>Notas
+            <input id="admin-code-notes" type="text" maxlength="2000" placeholder="Opcional">
+          </label>
+          <button class="btn btn-primary btn-small" type="submit">Generar código</button>
+        </form>
+        <p class="muted">Cada código se usa una sola vez. Si eliges un negocio existente, el cliente se une como administrador y se extiende su licencia; si dejas "Nuevo cliente", se crea un negocio nuevo con la etiqueta indicada.</p>
+        <div class="admin-code-result" id="admin-code-result" hidden></div>
+        <div class="admin-table-wrap">
+          <table class="admin-table admin-code-table">
+            <thead>
+              <tr>
+                <th>Código</th>
+                <th>Cliente</th>
+                <th>Estado</th>
+                <th>Activado</th>
+                <th>Acceso hasta</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="admin-codes">
+              <tr><td colspan="6" class="muted">Cargando códigos…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel admin-panel">
+        <div class="admin-toolbar">
+          <div>
             <h2>Negocios</h2>
             <p class="muted" id="admin-count">0 negocios</p>
           </div>
@@ -130,6 +175,6 @@
 
   <div class="toast" id="admin-toast" role="status" aria-live="polite"></div>
 
-  <script type="module" src="./js/admin.js?v=3.0.0"></script>
+  <script type="module" src="./js/admin.js?v=3.1.0"></script>
 </body>
 </html>

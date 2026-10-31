@@ -286,6 +286,19 @@ export async function signIn(config, email, password) {
   return session;
 }
 
+export async function signInAnonymously(config) {
+  const payload = await request(config, '/auth/v1/signup', {
+    method: 'POST',
+    body: { data: {}, gotrue_meta_security: {} }
+  });
+  const data = payload?.session ?? payload;
+  const session = createSession(data, '');
+  if (!session?.accessToken || !session.userId) {
+    throw new Error('No se pudo crear la sesión de acceso.');
+  }
+  return session;
+}
+
 export async function refreshSession(config, session) {
   if (!session?.refreshToken) throw new Error('La sesión expiró. Inicia sesión de nuevo.');
   const payload = await request(config, '/auth/v1/token?grant_type=refresh_token', {
@@ -549,4 +562,25 @@ export async function adminAddAdmin(config, session, email) {
 
 export async function adminRemoveAdmin(config, session, userId) {
   return rpc(config, session, 'admin_remove_admin', { p_user_id: userId });
+}
+
+export async function redeemAccessCode(config, session, code) {
+  return rpc(config, session, 'redeem_access_code', { p_code: code });
+}
+
+export async function adminListAccessCodes(config, session) {
+  return rpc(config, session, 'admin_list_access_codes');
+}
+
+export async function adminCreateAccessCode(config, session, payload) {
+  return rpc(config, session, 'admin_create_access_code', {
+    p_label: payload.label ?? '',
+    p_days: payload.days ?? 30,
+    p_tenant_id: payload.tenantId ?? null,
+    p_notes: payload.notes ?? ''
+  });
+}
+
+export async function adminRevokeAccessCode(config, session, codeId) {
+  return rpc(config, session, 'admin_revoke_access_code', { p_id: codeId });
 }

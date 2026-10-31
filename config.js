@@ -2,7 +2,7 @@ export const APP_CONFIG = {
   supabaseUrl: 'https://gxddocnoiwieehkbswbi.supabase.co',
   supabaseAnonKey: 'sb_publishable_Fxe06JqpVX1-FWRpkANOPQ_vSOrdbeA',
   appName: 'Administración de Corte Sergio',
-  appVersion: '3.0.0',
+  appVersion: '3.1.0',
   trialDays: 14,
   offlineGraceDays: 7,
   currency: 'USD',
